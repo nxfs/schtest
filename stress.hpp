@@ -1,12 +1,13 @@
 #pragma once
 
+#include <functional>
 #include <stdint.h>
 #include <stdio.h>
 
 struct stress_cfg {
-	void (*execute_task_item) (void);
-	double (*next_task_arrival_secs) (void);
-	uint32_t (*next_task_weight) (void);
+	std::function<void(void)> execute_task_item;
+	std::function<double(void)> next_task_arrival_secs;
+	std::function<uint32_t(void)> next_task_weight;
 	double total_duration_secs;
 };
 
