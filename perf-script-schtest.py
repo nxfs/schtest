@@ -121,13 +121,13 @@ def sched__sched_wakeup_new(event_name, context, common_cpu,
     timeline.add_event(event)
 
 
-def sched__sched_wakeup(event_name, context, common_cpu,
-	common_secs, common_nsecs, common_pid, common_comm,
-	common_callchain, comm, pid, prio, success,
-	target_cpu, perf_sample_dict):
+def sched__sched_waking(event_name, context, common_cpu,
+    common_secs, common_nsecs, common_pid, common_comm,
+    common_callchain, comm, pid, prio, target_cpu,
+    perf_sample_dict):
 
     event = Event(event_name = event_name, cpu = common_cpu, pid = common_pid, time = common_secs * 1000000000 + common_nsecs, comm = common_comm)
     timeline.add_event(event)
 
 def trace_unhandled(event_name, context, event_fields_dict, perf_sample_dict):
-    raise Exception('Sample: {'+get_dict_as_string(perf_sample_dict['sample'], ', ')+'}')
+    raise Exception(f'Unhandled event: {event_name}')

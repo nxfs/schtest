@@ -1,5 +1,5 @@
 #include "stress.hpp"
-#include <asm-generic/errno-base.h>
+#include <cerrno>
 #include <cstdio>
 #include <getopt.h>
 #include <functional>

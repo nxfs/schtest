@@ -4,3 +4,7 @@ Makefile
 cmake_install.cmake
 compile_commands.json
 schtest
+perf.data
+perf.data.old
+cgroup2/
+schtest.out.txt
