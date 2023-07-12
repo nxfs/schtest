@@ -27,7 +27,7 @@ class Event:
         self.comm = comm
 
     def print(self):
-        print("[%d] %2d %6d" % (self.time, self.cpu, self.pid))
+        print("[%d] %2d %6d %s" % (self.time, self.cpu, self.pid, self.event_name))
 
 class Timeline:
     def __init__(self):
@@ -43,6 +43,7 @@ class Timeline:
 
 
 timeline = Timeline()
+runtimes = {}
 
 
 def trace_begin():
@@ -51,6 +52,8 @@ def trace_begin():
 
 def trace_end():
     timeline.print()
+    for comm, runtime in runtimes.items():
+        print(f"{comm} runtime: {runtime/1000000:.2f} [ms]")
 
 
 def sched__sched_stat_runtime(event_name, context, common_cpu,
@@ -60,6 +63,9 @@ def sched__sched_stat_runtime(event_name, context, common_cpu,
 
     event = Event(event_name = event_name, cpu = common_cpu, pid = common_pid, time = common_secs * 1000000000 + common_nsecs, comm = common_comm)
     timeline.add_event(event)
+    if event.comm not in runtimes:
+        runtimes[event.comm] = 0
+    runtimes[event.comm] = runtimes[event.comm] + runtime
 
 
 def sched__sched_stat_iowait(event_name, context, common_cpu,
