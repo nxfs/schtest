@@ -1,9 +1,9 @@
 #include "stress.hpp"
+
 #include <cerrno>
 #include <cstdio>
-#include <getopt.h>
 #include <functional>
-#include <stdlib.h>
+#include <getopt.h>
 
 static int parse_double(const char *str, double &val) {
 	if (!str)
@@ -51,9 +51,9 @@ static uint32_t parse_uint32_t(const char *str, uint32_t &val) {
 }
 
 int main(int argc, char *argv[]) {
+	double total_duration_secs = 1.0;
 	double period_secs = 0.02;
 	uint32_t task_weight = 250u;
-	double total_duration_secs = 1.0;
 
 	static struct option long_options[] = {
 		{"period",   required_argument, 0, 'p'},
@@ -65,7 +65,7 @@ int main(int argc, char *argv[]) {
 	int option_index = 0;
 	int rc = 0;
 	while(!rc) {
-		c = getopt_long(argc, argv, "p:w:d:", long_options, &option_index);
+		c = getopt_long(argc, argv, "t:p:w:d", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -96,9 +96,9 @@ int main(int argc, char *argv[]) {
 	}
 
 	printf("Stress config\n");
+	printf("Total duration [s] = %.3f\n\n", total_duration_secs);
 	printf("Period [s]         = %.3f\n", period_secs);
 	printf("Task weight        = %u\n", task_weight);
-	printf("Total duration [s] = %.3f\n\n", total_duration_secs);
 
 	struct stress_cfg stress_cfg;
 	stress_cfg.execute_task_item = default_bogops;

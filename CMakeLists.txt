@@ -2,12 +2,7 @@ cmake_minimum_required(VERSION 2.8)
 
 project(schtest)
 
-if(NOT DEFINED ENV{CMAKE_EXPORT_COMPILE_COMMANDS})
-	message("ENV(CMAKE_EXPORT_COMPILE_COMMANDS) not defined, setting to TRUE")
-	set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
-endif()
+set (CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-set(SOURCES main.cpp stress.cpp time.cpp)
-set(HEADERS stress.hpp time.hpp)
-
-add_executable(schtest ${SOURCES} ${HEADERS})
+add_subdirectory(src/stress)
+add_subdirectory(src/multistress)

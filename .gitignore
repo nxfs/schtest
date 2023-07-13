@@ -8,3 +8,5 @@ perf.data
 perf.data.old
 cgroup2/
 schtest.out.txt
+bin/multistress
+bin/stress

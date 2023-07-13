@@ -56,7 +56,7 @@ def trace_end():
         print(f"{comm} runtime: {runtime/1000000:.2f} [ms]")
 
 
-def sched__sched_stat_runtime(event_name, context, common_cpu,
+def 0sched__sched_stat_runtime(event_name, context, common_cpu,
                               common_secs, common_nsecs, common_pid, common_comm,
                               common_callchain, comm, pid, runtime, vruntime,
                               perf_sample_dict):
