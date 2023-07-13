@@ -24,6 +24,6 @@ echo $pid > $schtest_cg/cgroup.procs
 
 mount -o remount,mode=755 /sys/kernel/debug/tracing/
 
-perf sched record -- ./schtest "$@ -g $schtest_cg" > schtest.out.txt
+perf sched record -- ./bin/schtest "$@ -g $schtest_cg" > schtest.out.txt
 
 perf script --script perf-script-schtest.py

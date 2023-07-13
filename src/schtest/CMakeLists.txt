@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8)
 
-project(multistress)
+project(schtest)
 
 if(NOT DEFINED ENV{CMAKE_EXPORT_COMPILE_COMMANDS})
 	message("ENV(CMAKE_EXPORT_COMPILE_COMMANDS) not defined, setting to TRUE")
@@ -10,4 +10,4 @@ endif()
 set(SOURCES main.c)
 set(HEADERS)
 
-add_executable(multistress ${SOURCES} ${HEADERS})
+add_executable(schtest ${SOURCES} ${HEADERS})

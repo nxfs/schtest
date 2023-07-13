@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <linux/limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -10,7 +11,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define OUT_FILENAME_LENGTH 32
+#define CPU_SET_LENGTH 32
 
 struct task_spec {
 	char *cmd;
@@ -65,7 +66,7 @@ static void exec_task(struct task_spec *spec, int task_idx) {
 	}
 	newargv[newargc] = NULL;
 	char *newenviron[] = { NULL };
-	char out_filename[OUT_FILENAME_LENGTH];
+	char out_filename[PATH_MAX];
 	get_out_filename(out_filename, task_idx);
 	int fd = open(out_filename, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 	if (fd == -1) {
@@ -94,18 +95,44 @@ static pid_t fork_task(struct task_spec *spec, int task_idx) {
 	return c_pid;
 }
 
+int setup_cgroup2(char* cgroup2, int* task_pids, int task_count) {
+	printf("Moving tasks to cgroups (%s)...\n", cgroup2);
+	char cgroup_procs[PATH_MAX];
+	sprintf(cgroup_procs, "%s/cgroup.procs", cgroup2);
+	for (int i = 0; i < task_count; i++) {
+		FILE *f = fopen(cgroup_procs, "a");
+		if (!f) {
+			fprintf(stderr, "Could not open cgroup.procs at %s, errno = %d\n", cgroup_procs, errno);
+			return errno;
+		}
+		if (fprintf(f, "%d", task_pids[i]) < 0) {
+			fprintf(stderr, "Could not write pid %d of task %d to cgroup.procs at %s, errno = %d\n", task_pids[i], i, cgroup_procs, errno);
+			return errno;
+		}
+		if (fclose(f)) {
+			fprintf(stderr, "Could not close file %p for cgroup.procs at %s, errno = %d\n", f, cgroup_procs, errno);
+			return errno;
+		}
+	}
+	return 0;
+}
+
 int main(int argc, char *argv[]) {
 	static struct option long_options[] = {
 		{"task",       required_argument, 0, 't'},
 		{"task_count", required_argument, 0, 'c'},
+		{"cgroup2",    required_argument, 0, 'g'},
+		{"cpu_set",    required_argument, 0, 's'},
 	};
 
 	struct task_spec *next = NULL, *prev = NULL, *head = NULL;
+	char cgroup2[PATH_MAX / 2] = "";
+	char cpu_set[CPU_SET_LENGTH] = "";
 	int c;
 	int option_index = 0;
 	int rc = 0;
 	while(!rc) {
-		c = getopt_long(argc, argv, "t:c:", long_options, &option_index);
+		c = getopt_long(argc, argv, "t:c:g:s:", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -133,6 +160,22 @@ int main(int argc, char *argv[]) {
 			case 'c':
 				rc = parse_uint32_t(optarg, &next->count);
 				break;
+			case 'g':
+				if (strlen(optarg) >= PATH_MAX / 2) {
+					fprintf(stderr, "cgroup2 filename %s is too long\n", optarg);
+					rc = -EINVAL;
+				} else {
+					strcpy(cgroup2, optarg);
+				}
+				break;
+			case 's':
+				if (strlen(optarg) >= CPU_SET_LENGTH) {
+					fprintf(stderr, "cpu_set %s is too long\n", optarg);
+					rc = -EINVAL;
+				} else {
+					strcpy(cpu_set, optarg);
+				}
+				break;
 			case '?':
 				rc = -EINVAL;
 				break;
@@ -156,13 +199,14 @@ int main(int argc, char *argv[]) {
 	printf("Tasks\n");
 	int task_idx = 0;
 	for (struct task_spec *curr = head; curr != NULL; curr = curr->next) {
-		char out_filename[OUT_FILENAME_LENGTH];
+		char out_filename[PATH_MAX];
 		for (int i = 0; i < curr->count; i++) {
 			get_out_filename(out_filename, task_idx);
 			printf("\t%3d: %s > %s 2>&1\n", task_idx++, curr->cmd, out_filename);
 		}
 	}
 
+	printf("\nForking tasks...\n");
 	int *children_pids = (int*)malloc(task_idx * sizeof(int));
 	bool is_child = false;
 	task_idx = 0;
@@ -181,8 +225,15 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
+	if (*cgroup2 != '\0') {
+		if (setup_cgroup2(cgroup2, children_pids, task_idx)) {
+			fprintf(stderr, "Failed to setup cgroup\n");
+			exit(1);
+		}
+	}
+
 	if (!is_child) {
-		printf("Forked children, waiting for completion...\n");
+		printf("Waiting for tasks completion...\n");
 		pid_t wpid;
 		int status = 0;
 		while ((wpid = wait(&status)) > 0) {
