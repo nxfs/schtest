@@ -65,7 +65,7 @@ int main(int argc, char *argv[]) {
 	int option_index = 0;
 	int rc = 0;
 	while(!rc) {
-		c = getopt_long(argc, argv, "t:p:w:d", long_options, &option_index);
+		c = getopt_long(argc, argv, "t:p:w:d:", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -84,14 +84,14 @@ int main(int argc, char *argv[]) {
 				rc = -EINVAL;
 				break;
 			default:
-				fprintf(stderr, "BUG - option with character code 0x%2x is not implemented", c);
+				fprintf(stderr, "BUG - option with character code 0x%2x is not implemented\n", c);
 				rc = -EINVAL;
 				break;
 		}
 	}
 
 	if (rc) {
-		fprintf(stderr, "Parsing error for option %c at index %d with error code %d (errno = %d)", c, option_index, rc, errno);
+		fprintf(stderr, "Parsing error for option %c at index %d with error code %d (errno = %d)\n", c, option_index, rc, errno);
 		exit(rc);
 	}
 

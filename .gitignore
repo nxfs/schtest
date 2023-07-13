@@ -10,3 +10,4 @@ cgroup2/
 schtest.out.txt
 bin/multistress
 bin/stress
+fork_*.txt
