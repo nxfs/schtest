@@ -95,10 +95,38 @@ static pid_t fork_task(struct task_spec *spec, int task_idx) {
 	return c_pid;
 }
 
-int setup_cgroup2(char* cgroup2, int* task_pids, int task_count) {
-	printf("Moving tasks to cgroups (%s)...\n", cgroup2);
+int setup_cgroup_cpu_set(char* cgroup, char* cpu_set) {
+	char cgroup_cpu_set[PATH_MAX];
+	sprintf(cgroup_cpu_set, "%s/cpuset.cpus", cgroup);
+
+	if (access(cgroup_cpu_set, F_OK) == 0) {
+		printf("Setting up cgroup %s cpu set <%s> ...\n", cgroup, cpu_set);
+
+		FILE *f = fopen(cgroup_cpu_set, "a");
+		if (!f) {
+			fprintf(stderr, "Could not open cpuset.cpus at %s, errno = %d\n", cgroup_cpu_set, errno);
+			return errno;
+		}
+		if (fprintf(f, "%s", cpu_set) < 0) {
+			fprintf(stderr, "Could not write cpu sets <%s> to cpuset.cpus at %s, errno = %d\n", cpu_set, cgroup_cpu_set, errno);
+			return errno;
+		}
+		if (fclose(f)) {
+			fprintf(stderr, "Could not close cpuset.cpus file at %s after writing cpu sets <%s>, errno = %d\n", cgroup_cpu_set, cpu_set, errno);
+			return errno;
+		}
+	} else if (*cpu_set != '\0') {
+		fprintf(stderr, "Cannot access cpu set file at %s", cgroup_cpu_set);
+		return -EACCES;
+	}
+
+	return 0;
+}
+
+int move_tasks_to_cgroup(char* cgroup, int* task_pids, int task_count) {
+	printf("Moving tasks to cgroup %s ...\n", cgroup);
 	char cgroup_procs[PATH_MAX];
-	sprintf(cgroup_procs, "%s/cgroup.procs", cgroup2);
+	sprintf(cgroup_procs, "%s/cgroup.procs", cgroup);
 	for (int i = 0; i < task_count; i++) {
 		FILE *f = fopen(cgroup_procs, "a");
 		if (!f) {
@@ -110,7 +138,7 @@ int setup_cgroup2(char* cgroup2, int* task_pids, int task_count) {
 			return errno;
 		}
 		if (fclose(f)) {
-			fprintf(stderr, "Could not close file %p for cgroup.procs at %s, errno = %d\n", f, cgroup_procs, errno);
+			fprintf(stderr, "Could not close cgroup.procs file at %s, errno = %d\n", cgroup_procs, errno);
 			return errno;
 		}
 	}
@@ -121,12 +149,12 @@ int main(int argc, char *argv[]) {
 	static struct option long_options[] = {
 		{"task",       required_argument, 0, 't'},
 		{"task_count", required_argument, 0, 'c'},
-		{"cgroup2",    required_argument, 0, 'g'},
+		{"cgroup",    required_argument, 0, 'g'},
 		{"cpu_set",    required_argument, 0, 's'},
 	};
 
 	struct task_spec *next = NULL, *prev = NULL, *head = NULL;
-	char cgroup2[PATH_MAX / 2] = "";
+	char cgroup[PATH_MAX / 2] = "";
 	char cpu_set[CPU_SET_LENGTH] = "";
 	int c;
 	int option_index = 0;
@@ -162,10 +190,10 @@ int main(int argc, char *argv[]) {
 				break;
 			case 'g':
 				if (strlen(optarg) >= PATH_MAX / 2) {
-					fprintf(stderr, "cgroup2 filename %s is too long\n", optarg);
+					fprintf(stderr, "cgroup filename %s is too long\n", optarg);
 					rc = -EINVAL;
 				} else {
-					strcpy(cgroup2, optarg);
+					strcpy(cgroup, optarg);
 				}
 				break;
 			case 's':
@@ -225,9 +253,13 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	if (*cgroup2 != '\0') {
-		if (setup_cgroup2(cgroup2, children_pids, task_idx)) {
-			fprintf(stderr, "Failed to setup cgroup\n");
+	if (*cgroup != '\0') {
+		if (setup_cgroup_cpu_set(cgroup, cpu_set)) {
+			fprintf(stderr, "Failed to setup cgroup cpu set\n");
+			exit(1);
+		}
+		if (move_tasks_to_cgroup(cgroup, children_pids, task_idx)) {
+			fprintf(stderr, "Failed to move tasks to cgroup\n");
 			exit(1);
 		}
 	}
