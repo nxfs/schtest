@@ -20,7 +20,7 @@ struct task_spec {
 	struct task_spec *next;
 };
 
-void get_out_filename(char *out_filename, int task_idx) {
+static void get_out_filename(char *out_filename, int task_idx) {
 	sprintf(out_filename, "fork_%d.txt", task_idx);
 }
 
@@ -96,7 +96,7 @@ static pid_t fork_task(struct task_spec *spec, int task_idx) {
 	return c_pid;
 }
 
-int setup_cgroup_cpu_set(char* cgroup, char* cpu_set) {
+static int setup_cgroup_cpu_set(char* cgroup, char* cpu_set) {
 	char cgroup_cpu_set[PATH_MAX];
 	sprintf(cgroup_cpu_set, "%s/cpuset.cpus", cgroup);
 
@@ -124,7 +124,7 @@ int setup_cgroup_cpu_set(char* cgroup, char* cpu_set) {
 	return 0;
 }
 
-int print_cookie(int task_idx, int pid) {
+static int print_cookie(int task_idx, int pid) {
 	unsigned long long cookie;
 	int rc = prctl(PR_SCHED_CORE, PR_SCHED_CORE_GET, pid, PR_SCHED_CORE_SCOPE_THREAD, (unsigned long)&cookie);
 	if (rc)
@@ -134,7 +134,7 @@ int print_cookie(int task_idx, int pid) {
 	return rc;
 }
 
-int create_cookie(int cookie_count, int task_idx, int task_pid) {
+static int create_cookie(int cookie_count, int task_idx, int task_pid) {
 	if (!cookie_count || task_idx >= cookie_count)
 		return 0;
 
@@ -148,7 +148,7 @@ int create_cookie(int cookie_count, int task_idx, int task_pid) {
 	return rc;
 }
 
-int copy_cookie(int cookie_count, int task_idx, int donor_task_pid) {
+static int copy_cookie(int cookie_count, int task_idx, int donor_task_pid) {
 	if (!cookie_count || task_idx < cookie_count)
 		return 0;
 
@@ -162,7 +162,7 @@ int copy_cookie(int cookie_count, int task_idx, int donor_task_pid) {
 	return rc;
 }
 
-int move_tasks_to_cgroup(char* cgroup, int* task_pids, int task_count) {
+static int move_tasks_to_cgroup(char* cgroup, int* task_pids, int task_count) {
 	printf("Moving tasks to cgroup %s ...\n", cgroup);
 	char cgroup_procs[PATH_MAX];
 	sprintf(cgroup_procs, "%s/cgroup.procs", cgroup);
