@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -116,11 +117,49 @@ int setup_cgroup_cpu_set(char* cgroup, char* cpu_set) {
 			return errno;
 		}
 	} else if (*cpu_set != '\0') {
-		fprintf(stderr, "Cannot access cpu set file at %s", cgroup_cpu_set);
+		fprintf(stderr, "Cannot access cpu set file at %s\n", cgroup_cpu_set);
 		return -EACCES;
 	}
 
 	return 0;
+}
+
+int print_cookie(int task_idx, int pid) {
+	unsigned long long cookie;
+	int rc = prctl(PR_SCHED_CORE, PR_SCHED_CORE_GET, pid, PR_SCHED_CORE_SCOPE_THREAD, (unsigned long)&cookie);
+	if (rc)
+		fprintf(stderr, "Could not get cookie for task %d with pid %d, rc = %d, errno = %d\n", task_idx, pid, rc, errno);
+	else
+		fprintf(stdout, "Cookie for task %d with pid %d is %llx\n", task_idx, pid, cookie);
+	return rc;
+}
+
+int create_cookie(int cookie_count, int task_idx, int task_pid) {
+	if (!cookie_count || task_idx >= cookie_count)
+		return 0;
+
+	int rc = prctl(PR_SCHED_CORE, PR_SCHED_CORE_CREATE, task_pid, PR_SCHED_CORE_SCOPE_THREAD, 0);
+	if (rc) {
+		fprintf(stderr, "Could not create cookie for task %d with pid %d, rc = %d, errno = %d\n", task_idx, task_pid, rc, errno);
+	} else {
+		rc = print_cookie(task_idx, task_pid);
+	}
+
+	return rc;
+}
+
+int copy_cookie(int cookie_count, int task_idx, int donor_task_pid) {
+	if (!cookie_count || task_idx < cookie_count)
+		return 0;
+
+	int rc = prctl(PR_SCHED_CORE, PR_SCHED_CORE_SHARE_FROM, donor_task_pid, PR_SCHED_CORE_SCOPE_THREAD, 0);
+	if (rc) {
+		fprintf(stderr, "Task %d could not share cookie from task with pid %d, rc = %d, errno = %d\n", getpid(), donor_task_pid, rc, errno);
+	} else {
+		rc = print_cookie(task_idx, getpid());
+	}
+
+	return rc;
 }
 
 int move_tasks_to_cgroup(char* cgroup, int* task_pids, int task_count) {
@@ -148,19 +187,21 @@ int move_tasks_to_cgroup(char* cgroup, int* task_pids, int task_count) {
 int main(int argc, char *argv[]) {
 	static struct option long_options[] = {
 		{"task",       required_argument, 0, 't'},
-		{"task_count", required_argument, 0, 'c'},
-		{"cgroup",    required_argument, 0, 'g'},
+		{"task_count", required_argument, 0, 'n'},
+		{"cgroup",     required_argument, 0, 'g'},
 		{"cpu_set",    required_argument, 0, 's'},
+		{"cookies",    required_argument, 0, 'c'},
 	};
 
 	struct task_spec *next = NULL, *prev = NULL, *head = NULL;
 	char cgroup[PATH_MAX / 2] = "";
 	char cpu_set[CPU_SET_LENGTH] = "";
+	int cookie_count = 0;
 	int c;
 	int option_index = 0;
 	int rc = 0;
 	while(!rc) {
-		c = getopt_long(argc, argv, "t:c:g:s:", long_options, &option_index);
+		c = getopt_long(argc, argv, "t:n:g:s:c:", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -185,7 +226,7 @@ int main(int argc, char *argv[]) {
 				next->count = 1;
 				strcpy(next->cmd, optarg);
 				break;
-			case 'c':
+			case 'n':
 				rc = parse_uint32_t(optarg, &next->count);
 				break;
 			case 'g':
@@ -204,6 +245,9 @@ int main(int argc, char *argv[]) {
 					strcpy(cpu_set, optarg);
 				}
 				break;
+			case 'c':
+				rc = parse_uint32_t(optarg, &cookie_count);
+				break;
 			case '?':
 				rc = -EINVAL;
 				break;
@@ -214,41 +258,82 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
+	if (rc) {
+		fprintf(stderr, "Parsing error for option %c at index %d with error code %d (errno = %d)\n\n", c, option_index, rc, errno);
+	}
+
 	if (head == NULL) {
 		fprintf(stderr, "At least one task must be specified\n");
 		rc = -EINVAL;
 	}
 
+	if (cgroup[0] == '\0' && cpu_set[0] != '\0') {
+		fprintf(stderr, "Cannot use cpu set %s without specifying a cgroup\n", cpu_set);
+		rc = -EINVAL;
+	}
+
 	if (rc) {
-		fprintf(stderr, "Parsing error for option %c at index %d with error code %d (errno = %d)\n", c, option_index, rc, errno);
+		fprintf(stderr, "Usage: schtest [TASKS]... [OPTION]...\n");
+		fprintf(stderr, "Executes tasks\n\n");
+		fprintf(stderr, "\t-t <cmd>\tAdds a task group. Can be used multiple times. Each task in the group is executed by the given <cmd>.\n");
+		fprintf(stderr, "\t-n <N>\t\tThe number of tasks in the group. Each task is executed with the given <cmd> passed with the -t argument.\n");
+		fprintf(stderr, "\t-g <cgroup>\tThe cgroup path. Each task is moved in the corresponding cgroup.\n");
+		fprintf(stderr, "\t-s <cpuset>\tThe cpuset. The cgroup is bound to the given cpuset.\n");
+		fprintf(stderr, "\t-c <N>\t\tThe number of core scheduling cookies. If non-zero, each task is assigned the cookie corresponding to its index modulo the cookie count.\n\n");
+		fprintf(stderr, "Examples:\n\n");
+		fprintf(stderr, "\tschtest -t \"bin/stress\"");
+		fprintf(stderr, "\n\t\t* Launches bin/stress");
+		fprintf(stderr, "\n\n");
+		fprintf(stderr, "\tschtest -t \"bin/stress -d 20\" -t \"bin/stress -d 10\" -n 3 -g \"cgroup2/schtest\" -s \"1-12\" -c 2");
+		fprintf(stderr, "\n\t\t* Launches 1 x \"bin/stress -d 20\" and 3 x \"bin/stress -d 10\"");
+		fprintf(stderr, "\n\t\t* Move launched processes to the cgroup cgroup2/schtest");
+		fprintf(stderr, "\n\t\t* Assign the cpuset \"1-12\" to the cgroup");
+		fprintf(stderr, "\n\t\t* Create two cookies and assign them to the four launched processes, using round robin assignment");
+		fprintf(stderr, "\n\n");
+
 		exit(rc);
 	}
 
 	printf("Tasks\n");
-	int task_idx = 0;
+	int task_count = 0;
 	for (struct task_spec *curr = head; curr != NULL; curr = curr->next) {
 		char out_filename[PATH_MAX];
 		for (int i = 0; i < curr->count; i++) {
-			get_out_filename(out_filename, task_idx);
-			printf("\t%3d: %s > %s 2>&1\n", task_idx++, curr->cmd, out_filename);
+			get_out_filename(out_filename, task_count);
+			printf("\t%3d: %s > %s 2>&1\n", task_count++, curr->cmd, out_filename);
 		}
 	}
 
+	if (cookie_count > task_count) {
+		fprintf(stderr, "Cannot use more cookies (%d) than tasks (%d)\n", cookie_count, task_count);
+		return -EINVAL;
+	}
+
 	printf("\nForking tasks...\n");
-	int *children_pids = (int*)malloc(task_idx * sizeof(int));
-	bool is_child = false;
-	task_idx = 0;
+	int *children_pids = (int*)malloc(task_count * sizeof(int));
+	int task_idx = 0;
 	for (struct task_spec *curr = head; curr != NULL; curr = curr->next) {
 		for (int i = 0; i < curr->count; i++) {
-			pid_t c_pid = fork_task(curr, task_idx);
+			pid_t c_pid = fork();
 			if (c_pid == -1) {
 				fprintf(stderr, "Fork failure for task %d\n", task_idx);
 				while (task_idx > 0) {
 					killpg(--task_idx, SIGKILL);
 				}
 				exit(1);
+			} else if (c_pid == 0) {
+				if (copy_cookie(cookie_count, task_idx, cookie_count ? children_pids[task_idx % cookie_count] : -1)) {
+					fprintf(stderr, "Failed to copy cookies for task %d with pid %d\n", task_idx, c_pid);
+					exit(1);
+				}
+				exec_task(curr, task_idx); // doesn't return
 			} else {
-				children_pids[task_idx++] = c_pid;
+				children_pids[task_idx] = c_pid;
+				if (create_cookie(cookie_count, task_idx, c_pid)) {
+					fprintf(stderr, "Failed to create cookie for task %d with pid %d\n", task_idx, c_pid);
+					exit(1);
+				}
+				task_idx++;
 			}
 		}
 	}
@@ -258,21 +343,20 @@ int main(int argc, char *argv[]) {
 			fprintf(stderr, "Failed to setup cgroup cpu set\n");
 			exit(1);
 		}
-		if (move_tasks_to_cgroup(cgroup, children_pids, task_idx)) {
+		if (move_tasks_to_cgroup(cgroup, children_pids, task_count)) {
 			fprintf(stderr, "Failed to move tasks to cgroup\n");
 			exit(1);
 		}
 	}
 
-	if (!is_child) {
-		printf("Waiting for tasks completion...\n");
-		pid_t wpid;
-		int status = 0;
-		while ((wpid = wait(&status)) > 0) {
-			printf("Task %d completed with status %d\n", wpid, status);
-		}
-		printf("Done\n");
+
+	printf("Waiting for tasks completion...\n");
+	pid_t wpid;
+	int status = 0;
+	while ((wpid = wait(&status)) > 0) {
+		printf("Task %d completed with status %d\n", wpid, status);
 	}
+	printf("Done\n");
 
 	return 0;
 }
