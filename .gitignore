@@ -9,4 +9,4 @@ cgroup2/
 schtest.out.txt
 bin/schtest
 bin/stress
-fork_*.txt
+results*

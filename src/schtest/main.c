@@ -11,6 +11,7 @@
 #include <stdatomic.h>
 #include <sys/prctl.h>
 #include <sys/shm.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -30,8 +31,28 @@ struct task_shm {
 	atomic_int cookie_ready_sem;
 };
 
-static void get_out_filename(char *out_filename, int task_idx) {
-	sprintf(out_filename, "fork_%d.txt", task_idx);
+static void get_task_out_filename(char *results_dir, char *out_filename, int task_idx) {
+	sprintf(out_filename, "%s/fork_%03d.txt", results_dir, task_idx);
+}
+
+static int make_results_dir(char *results_dir) {
+	struct stat st = {0};
+	if (stat(results_dir, &st) == -1) {
+		if (mkdir(results_dir, 0600) == -1) {
+			fprintf(stderr, "Could not make results dir at %s, errno = %d\n", results_dir, errno);
+			return errno;
+		}
+	} else {
+		if (!S_ISDIR(st.st_mode)) {
+			fprintf(stderr, "Not a valid results directory: %s\n", results_dir);
+			return -ENOTDIR;
+		}
+		if (!st.st_mode & S_IWRITE) {
+			fprintf(stderr, "Not a writeable results directory: %s\n", results_dir);
+			return -EPERM;
+		}
+	}
+	return 0;
 }
 
 static uint32_t parse_uint32_t(const char *str, uint32_t *val) {
@@ -58,7 +79,16 @@ static uint32_t parse_uint32_t(const char *str, uint32_t *val) {
 	return 0;
 }
 
-static void exec_task(struct task_spec *spec, int task_idx) {
+int parse_string(const char *str, int max_length, char *out) {
+	if (strlen(str) >= max_length) {
+		fprintf(stderr, "string %s is too long\n", str);
+		return -EINVAL;
+	}
+	strcpy(out, str);
+	return 0;
+}
+
+static void exec_task(struct task_spec *spec, int task_idx, char *results_dir) {
 	// arg max refers to the total argument size, not argc, just over allocate here to keep it simple
 	// we don't have to check for overflows because the input args are derived from this program's input args which is also subject to the same limit
 	long arg_max = sysconf(_SC_ARG_MAX);
@@ -78,32 +108,29 @@ static void exec_task(struct task_spec *spec, int task_idx) {
 	newargv[newargc] = NULL;
 	char *newenviron[] = { NULL };
 	char out_filename[PATH_MAX];
-	get_out_filename(out_filename, task_idx);
+	get_task_out_filename(results_dir, out_filename, task_idx);
 	int fd = open(out_filename, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 	if (fd == -1) {
-		fprintf(stderr, "Unable to redirect stdout/stderr of fork %d with cmd %s at file %s\n", task_idx, spec->cmd, out_filename);
+		fprintf(stderr, "Unable to redirect stdout/stderr of fork %d with cmd %s at file %s, errno = %d\n", task_idx, spec->cmd, out_filename, errno);
+		exit(1);
 	} else {
 		int rc;
 		rc = dup2(fd, 1); // stdout
-		if (rc == -1)
+		if (rc == -1) {
 			fprintf(stderr, "Unable to redirect stdout of fork %d with cmd %s at file %s, errno = %d\n", task_idx, spec->cmd, out_filename, errno);
+			exit(1);
+		}
 		rc = dup2(fd, 2); // stderr
-		if (rc == -1)
+		if (rc == -1) {
 			fprintf(stderr, "Unable to redirect stderr of fork %d with cmd %s at file %s, errno = %d\n", task_idx, spec->cmd, out_filename, errno);
+			exit(1);
+		}
 		close(fd);
 	}
 
 	execve(newargv[0], newargv, newenviron); // doesn't return if successful
 	fprintf(stderr, "execve of failed for %s with errno %d\n", spec->cmd, errno);
 	exit(1);
-}
-
-static pid_t fork_task(struct task_spec *spec, int task_idx) {
-	pid_t c_pid = fork();
-	if (c_pid == 0) {
-		exec_task(spec, task_idx); // doesn't return
-	}
-	return c_pid;
 }
 
 static int setup_cgroup_cpu_set(char* cgroup, char* cpu_set) {
@@ -246,18 +273,20 @@ void sleep_nsecs(uint64_t nsecs) {
 	}
 }
 
-int write_ready_timestamp(uint64_t ready_timestamp) {
-	FILE *f = fopen(READY_TIMESTAMP_FILE, "w");
+int write_ready_timestamp(char *results_dir, uint64_t ready_timestamp) {
+	char path[PATH_MAX];
+	sprintf(path, "%s/%s", results_dir, READY_TIMESTAMP_FILE);
+	FILE *f = fopen(path, "w");
 	if (f == NULL) {
-		fprintf(stderr, "Could not open ready timestamp file '%s', errno = %d\n", READY_TIMESTAMP_FILE, errno);
+		fprintf(stderr, "Could not open ready timestamp file '%s', errno = %d\n", path, errno);
 		return errno;
 	}
 	if (fprintf(f, "%lu", ready_timestamp) < 0) {
-		fprintf(stderr, "Could not write ready timestamp %lu at file '%s', errno = %d\n", ready_timestamp, READY_TIMESTAMP_FILE, errno);
+		fprintf(stderr, "Could not write ready timestamp %lu at file '%s', errno = %d\n", ready_timestamp, path, errno);
 		return errno;
 	}
 	if (fclose(f)) {
-		fprintf(stderr, "Could not close ready timestamp file '%s', errno = %d\n", READY_TIMESTAMP_FILE, errno);
+		fprintf(stderr, "Could not close ready timestamp file '%s', errno = %d\n", path, errno);
 		return errno;
 	}
 	return 0;
@@ -270,17 +299,19 @@ int main(int argc, char *argv[]) {
 		{"cgroup",     required_argument, 0, 'g'},
 		{"cpu_set",    required_argument, 0, 's'},
 		{"cookies",    required_argument, 0, 'c'},
+		{"dir",        required_argument, 0, 'd'},
 	};
 
 	struct task_spec *next = NULL, *prev = NULL, *head = NULL;
 	char cgroup[PATH_MAX / 2] = "";
+	char results_dir[PATH_MAX / 2] = ".";
 	char cpu_set[CPU_SET_LENGTH] = "";
 	int cookie_count = 0;
 	int c;
 	int option_index = 0;
 	int rc = 0;
 	while(!rc) {
-		c = getopt_long(argc, argv, "t:n:g:s:c:", long_options, &option_index);
+		c = getopt_long(argc, argv, "t:n:g:s:c:d:", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -309,12 +340,7 @@ int main(int argc, char *argv[]) {
 				rc = parse_uint32_t(optarg, &next->count);
 				break;
 			case 'g':
-				if (strlen(optarg) >= PATH_MAX / 2) {
-					fprintf(stderr, "cgroup filename %s is too long\n", optarg);
-					rc = -EINVAL;
-				} else {
-					strcpy(cgroup, optarg);
-				}
+				rc = parse_string(optarg, PATH_MAX / 2, cgroup);
 				break;
 			case 's':
 				if (strlen(optarg) >= CPU_SET_LENGTH) {
@@ -326,6 +352,9 @@ int main(int argc, char *argv[]) {
 				break;
 			case 'c':
 				rc = parse_uint32_t(optarg, &cookie_count);
+				break;
+			case 'd':
+				rc = parse_string(optarg, PATH_MAX / 2, results_dir);
 				break;
 			case '?':
 				rc = -EINVAL;
@@ -358,8 +387,9 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "\t-n <N>\t\tThe number of tasks in the group. Each task is executed with the given <cmd> passed with the -t argument.\n");
 		fprintf(stderr, "\t-g <cgroup>\tThe cgroup path. Each task is moved in the corresponding cgroup.\n");
 		fprintf(stderr, "\t-s <cpuset>\tThe cpuset. The cgroup is bound to the given cpuset.\n");
-		fprintf(stderr, "\t-c <N>\t\tThe number of core scheduling cookies. If non-zero, each task is assigned the cookie corresponding to its index modulo the cookie count.\n\n");
-		fprintf(stderr, "Examples:\n\n");
+		fprintf(stderr, "\t-c <N>\t\tThe number of core scheduling cookies. If non-zero, each task is assigned the cookie corresponding to its index modulo the cookie count.\n");
+		fprintf(stderr, "\t-d <dir>\tThe results directory. Defaults to the working directory.\n");
+		fprintf(stderr, "\nExamples:\n\n");
 		fprintf(stderr, "\tschtest -t \"bin/stress\"");
 		fprintf(stderr, "\n\t\t* Launches bin/stress");
 		fprintf(stderr, "\n\n");
@@ -368,9 +398,15 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "\n\t\t* Move launched processes to the cgroup cgroup2/schtest");
 		fprintf(stderr, "\n\t\t* Assign the cpuset \"1-12\" to the cgroup");
 		fprintf(stderr, "\n\t\t* Create two cookies and assign them to the four launched processes, using round robin assignment");
+		fprintf(stderr, "\n\t\t  Each even numbered task will get the first cookie and each odd numbered task will get the second cookie");
 		fprintf(stderr, "\n\n");
 
 		exit(rc);
+	}
+
+	if (make_results_dir(results_dir)) {
+		fprintf(stderr, "Could not initialize results directory\n");
+		exit(1);
 	}
 
 	printf("Tasks\n");
@@ -378,7 +414,7 @@ int main(int argc, char *argv[]) {
 	for (struct task_spec *curr = head; curr != NULL; curr = curr->next) {
 		char out_filename[PATH_MAX];
 		for (int i = 0; i < curr->count; i++) {
-			get_out_filename(out_filename, task_count);
+			get_task_out_filename(results_dir, out_filename, task_count);
 			printf("\t%3d: %s > %s 2>&1\n", task_count++, curr->cmd, out_filename);
 		}
 	}
@@ -415,7 +451,7 @@ int main(int argc, char *argv[]) {
 					fprintf(stderr, "Failed to copy cookies for task %d with pid %d\n", task_idx, c_pid);
 					exit(1);
 				}
-				exec_task(curr, task_idx); // doesn't return
+				exec_task(curr, task_idx, results_dir); // doesn't return
 			} else {
 				children_pids[task_idx] = c_pid;
 				if (create_cookie(cookie_count, task_idx, c_pid, task_shm)) {
@@ -454,7 +490,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	printf("\nWriting ready timestamp...\n");
-	if (write_ready_timestamp(ready_timestamp)) {
+	if (write_ready_timestamp(results_dir, ready_timestamp)) {
 		fprintf(stderr, "Failed to write ready timestamp\n");
 		exit(1);
 	}
