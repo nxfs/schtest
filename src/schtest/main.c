@@ -8,16 +8,26 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <sys/prctl.h>
+#include <sys/shm.h>
+#include <sys/time.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define CPU_SET_LENGTH 32
+
+static const char *READY_TIMESTAMP_FILE = "ready_timestamp.txt";
 
 struct task_spec {
 	char *cmd;
 	int count;
 	struct task_spec *next;
+};
+
+struct task_shm {
+	atomic_int cookie_ready_sem;
 };
 
 static void get_out_filename(char *out_filename, int task_idx) {
@@ -129,12 +139,13 @@ static int print_cookie(int task_idx, int pid) {
 	int rc = prctl(PR_SCHED_CORE, PR_SCHED_CORE_GET, pid, PR_SCHED_CORE_SCOPE_THREAD, (unsigned long)&cookie);
 	if (rc)
 		fprintf(stderr, "Could not get cookie for task %d with pid %d, rc = %d, errno = %d\n", task_idx, pid, rc, errno);
-	else
+	else {
 		fprintf(stdout, "Cookie for task %d with pid %d is %llx\n", task_idx, pid, cookie);
+	}
 	return rc;
 }
 
-static int create_cookie(int cookie_count, int task_idx, int task_pid) {
+static int create_cookie(int cookie_count, int task_idx, int task_pid, struct task_shm *task_shm) {
 	if (!cookie_count || task_idx >= cookie_count)
 		return 0;
 
@@ -143,12 +154,14 @@ static int create_cookie(int cookie_count, int task_idx, int task_pid) {
 		fprintf(stderr, "Could not create cookie for task %d with pid %d, rc = %d, errno = %d\n", task_idx, task_pid, rc, errno);
 	} else {
 		rc = print_cookie(task_idx, task_pid);
+		if (!rc)
+			task_shm->cookie_ready_sem--;
 	}
 
 	return rc;
 }
 
-static int copy_cookie(int cookie_count, int task_idx, int donor_task_pid) {
+static int copy_cookie(int cookie_count, int task_idx, int donor_task_pid, struct task_shm *task_shm) {
 	if (!cookie_count || task_idx < cookie_count)
 		return 0;
 
@@ -157,6 +170,8 @@ static int copy_cookie(int cookie_count, int task_idx, int donor_task_pid) {
 		fprintf(stderr, "Task %d could not share cookie from task with pid %d, rc = %d, errno = %d\n", getpid(), donor_task_pid, rc, errno);
 	} else {
 		rc = print_cookie(task_idx, getpid());
+		if (!rc)
+			task_shm->cookie_ready_sem--;
 	}
 
 	return rc;
@@ -180,6 +195,70 @@ static int move_tasks_to_cgroup(char* cgroup, int* task_pids, int task_count) {
 			fprintf(stderr, "Could not close cgroup.procs file at %s, errno = %d\n", cgroup_procs, errno);
 			return errno;
 		}
+	}
+	return 0;
+}
+
+static int shm_init(struct task_shm **task_shm) {
+	int shm_id = shmget(IPC_PRIVATE, sizeof(struct task_shm), IPC_CREAT | IPC_EXCL | 0666);
+	if (shm_id == -1) {
+		fprintf(stderr, "Could not create shared memory: errno = %d\n", errno);
+		return errno;
+	}
+	void *p = shmat(shm_id, NULL, 0);
+	if (p == (void *)-1) {
+		fprintf(stderr, "Could not attach shared memory: errno = %d\n", errno);
+		return errno;
+	}
+	*task_shm = p;
+	return 0;
+}
+
+uint64_t clock_get_time_nsecs() {
+	struct timespec ts;
+
+	errno = 0;
+	int rc = clock_gettime(CLOCK_REALTIME, &ts);
+
+	if (rc) {
+		fprintf(stderr, "FATAL: clock_gettime returned %d, errno %d\n\n", rc, errno);
+		exit(1);
+	}
+
+	return ((uint64_t)ts.tv_sec)*1000000000 + (uint64_t)ts.tv_nsec;
+}
+
+void sleep_nsecs(uint64_t nsecs) {
+       struct timespec t, trem;
+
+	t.tv_sec = nsecs / 1000000000;
+	t.tv_nsec = nsecs % 1000000000;
+
+	errno = 0;
+	int rc = nanosleep(&t, &trem) < 0;
+	if (rc) {
+		if (errno == EINTR) {
+			fprintf(stderr, "nanosleep was interrupted\n");
+		} else {
+			fprintf(stderr, "nanosleep returned %d, errno %d\n\n", rc, errno);
+			exit(1);
+		}
+	}
+}
+
+int write_ready_timestamp(uint64_t ready_timestamp) {
+	FILE *f = fopen(READY_TIMESTAMP_FILE, "w");
+	if (f == NULL) {
+		fprintf(stderr, "Could not open ready timestamp file '%s', errno = %d\n", READY_TIMESTAMP_FILE, errno);
+		return errno;
+	}
+	if (fprintf(f, "%lu", ready_timestamp) < 0) {
+		fprintf(stderr, "Could not write ready timestamp %lu at file '%s', errno = %d\n", ready_timestamp, READY_TIMESTAMP_FILE, errno);
+		return errno;
+	}
+	if (fclose(f)) {
+		fprintf(stderr, "Could not close ready timestamp file '%s', errno = %d\n", READY_TIMESTAMP_FILE, errno);
+		return errno;
 	}
 	return 0;
 }
@@ -309,6 +388,16 @@ int main(int argc, char *argv[]) {
 		return -EINVAL;
 	}
 
+	struct task_shm *task_shm = NULL;
+	if (cookie_count > 0) {
+		printf("\nCreating shared memory...\n");
+		if (shm_init(&task_shm)) {
+			fprintf(stderr, "Shared memory creation failure\n");
+			exit(1);
+		}
+		task_shm->cookie_ready_sem = task_count;
+	}
+
 	printf("\nForking tasks...\n");
 	int *children_pids = (int*)malloc(task_count * sizeof(int));
 	int task_idx = 0;
@@ -322,14 +411,14 @@ int main(int argc, char *argv[]) {
 				}
 				exit(1);
 			} else if (c_pid == 0) {
-				if (copy_cookie(cookie_count, task_idx, cookie_count ? children_pids[task_idx % cookie_count] : -1)) {
+				if (copy_cookie(cookie_count, task_idx, cookie_count ? children_pids[task_idx % cookie_count] : -1, task_shm)) {
 					fprintf(stderr, "Failed to copy cookies for task %d with pid %d\n", task_idx, c_pid);
 					exit(1);
 				}
 				exec_task(curr, task_idx); // doesn't return
 			} else {
 				children_pids[task_idx] = c_pid;
-				if (create_cookie(cookie_count, task_idx, c_pid)) {
+				if (create_cookie(cookie_count, task_idx, c_pid, task_shm)) {
 					fprintf(stderr, "Failed to create cookie for task %d with pid %d\n", task_idx, c_pid);
 					exit(1);
 				}
@@ -349,6 +438,26 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
+	uint64_t ready_timestamp = clock_get_time_nsecs();
+	if (cookie_count > 0) {
+		printf("\nWaiting for cookies...\n");
+		uint64_t timeout = ready_timestamp + 1000000000;
+		while (task_shm->cookie_ready_sem > 0) {
+			if (clock_get_time_nsecs() > timeout) {
+				fprintf(stderr, "Timeout waiting for cookie setup, missing %d/%d tasks\n", task_shm->cookie_ready_sem, task_count);
+				exit(1);
+			}
+			sleep_nsecs(1000000);
+		}
+		ready_timestamp = clock_get_time_nsecs();
+		printf("Cookies setup completed at %lu\n", ready_timestamp);
+	}
+
+	printf("\nWriting ready timestamp...\n");
+	if (write_ready_timestamp(ready_timestamp)) {
+		fprintf(stderr, "Failed to write ready timestamp\n");
+		exit(1);
+	}
 
 	printf("Waiting for tasks completion...\n");
 	pid_t wpid;
