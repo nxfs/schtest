@@ -19,7 +19,13 @@
 
 #define CPU_SET_LENGTH 32
 
-static const char *READY_TIMESTAMP_FILE = "ready_timestamp.txt";
+/*
+ * Format:
+ * First line: [process count] [cpu_set]
+ * Next lines, for each process: [task_idx] [pid] [cookie] [stop_ns] [exit_code]
+ * Last line: [start_ns] [stop_ns]
+ */
+static const char *OUT_FILE = "out.txt";
 
 struct task_spec {
 	char *cmd;
@@ -29,6 +35,11 @@ struct task_spec {
 
 struct task_shm {
 	atomic_int cookie_ready_sem;
+};
+
+struct task_info {
+	int pid;
+	unsigned long long cookie;
 };
 
 static void get_task_out_filename(char *results_dir, char *out_filename, int task_idx) {
@@ -138,7 +149,7 @@ static int setup_cgroup_cpu_set(char* cgroup, char* cpu_set) {
 	sprintf(cgroup_cpu_set, "%s/cpuset.cpus", cgroup);
 
 	if (access(cgroup_cpu_set, F_OK) == 0) {
-		printf("Setting up cgroup %s cpu set <%s> ...\n", cgroup, cpu_set);
+		printf("Setting up cgroup %s cpu set <%s> ...\n", cgroup, cpu_set[0] == '\0' ? "empty" : cpu_set);
 
 		FILE *f = fopen(cgroup_cpu_set, "a");
 		if (!f) {
@@ -161,28 +172,27 @@ static int setup_cgroup_cpu_set(char* cgroup, char* cpu_set) {
 	return 0;
 }
 
-static int print_cookie(int task_idx, int pid) {
-	unsigned long long cookie;
-	int rc = prctl(PR_SCHED_CORE, PR_SCHED_CORE_GET, pid, PR_SCHED_CORE_SCOPE_THREAD, (unsigned long)&cookie);
+static int get_cookie(int task_idx, int pid, unsigned long long *cookie) {
+	int rc = prctl(PR_SCHED_CORE, PR_SCHED_CORE_GET, pid, PR_SCHED_CORE_SCOPE_THREAD, (unsigned long)cookie);
 	if (rc)
 		fprintf(stderr, "Could not get cookie for task %d with pid %d, rc = %d, errno = %d\n", task_idx, pid, rc, errno);
-	else {
-		fprintf(stdout, "Cookie for task %d with pid %d is %llx\n", task_idx, pid, cookie);
-	}
 	return rc;
 }
 
-static int create_cookie(int cookie_count, int task_idx, int task_pid, struct task_shm *task_shm) {
-	if (!cookie_count || task_idx >= cookie_count)
+static int create_cookie(int cookie_count, int task_idx, int task_pid, struct task_shm *task_shm, unsigned long long *cookie) {
+	if (!cookie_count || task_idx >= cookie_count) {
 		return 0;
+	}
 
 	int rc = prctl(PR_SCHED_CORE, PR_SCHED_CORE_CREATE, task_pid, PR_SCHED_CORE_SCOPE_THREAD, 0);
 	if (rc) {
 		fprintf(stderr, "Could not create cookie for task %d with pid %d, rc = %d, errno = %d\n", task_idx, task_pid, rc, errno);
 	} else {
-		rc = print_cookie(task_idx, task_pid);
-		if (!rc)
+		rc = get_cookie(task_idx, task_pid, cookie);
+		if (!rc) {
+			fprintf(stdout, "Cookie for task %d with pid %d is %llx\n", task_idx, task_pid, *cookie);
 			task_shm->cookie_ready_sem--;
+		}
 	}
 
 	return rc;
@@ -196,15 +206,19 @@ static int copy_cookie(int cookie_count, int task_idx, int donor_task_pid, struc
 	if (rc) {
 		fprintf(stderr, "Task %d could not share cookie from task with pid %d, rc = %d, errno = %d\n", getpid(), donor_task_pid, rc, errno);
 	} else {
-		rc = print_cookie(task_idx, getpid());
-		if (!rc)
+		unsigned long long cookie;
+		int pid = getpid();
+		rc = get_cookie(task_idx, pid, &cookie);
+		if (!rc) {
+			fprintf(stdout, "Cookie for task %d with pid %d is %llx\n", task_idx, pid, cookie);
 			task_shm->cookie_ready_sem--;
+		}
 	}
 
 	return rc;
 }
 
-static int move_tasks_to_cgroup(char* cgroup, int* task_pids, int task_count) {
+static int move_tasks_to_cgroup(char* cgroup, struct task_info* task_info, int task_count) {
 	printf("Moving tasks to cgroup %s ...\n", cgroup);
 	char cgroup_procs[PATH_MAX];
 	sprintf(cgroup_procs, "%s/cgroup.procs", cgroup);
@@ -214,8 +228,8 @@ static int move_tasks_to_cgroup(char* cgroup, int* task_pids, int task_count) {
 			fprintf(stderr, "Could not open cgroup.procs at %s, errno = %d\n", cgroup_procs, errno);
 			return errno;
 		}
-		if (fprintf(f, "%d", task_pids[i]) < 0) {
-			fprintf(stderr, "Could not write pid %d of task %d to cgroup.procs at %s, errno = %d\n", task_pids[i], i, cgroup_procs, errno);
+		if (fprintf(f, "%d", task_info[i].pid) < 0) {
+			fprintf(stderr, "Could not write pid %d of task %d to cgroup.procs at %s, errno = %d\n", task_info[i].pid, i, cgroup_procs, errno);
 			return errno;
 		}
 		if (fclose(f)) {
@@ -273,20 +287,12 @@ void sleep_nsecs(uint64_t nsecs) {
 	}
 }
 
-int write_ready_timestamp(char *results_dir, uint64_t ready_timestamp) {
+int open_out_file(char *results_dir, FILE **f) {
 	char path[PATH_MAX];
-	sprintf(path, "%s/%s", results_dir, READY_TIMESTAMP_FILE);
-	FILE *f = fopen(path, "w");
-	if (f == NULL) {
-		fprintf(stderr, "Could not open ready timestamp file '%s', errno = %d\n", path, errno);
-		return errno;
-	}
-	if (fprintf(f, "%lu", ready_timestamp) < 0) {
-		fprintf(stderr, "Could not write ready timestamp %lu at file '%s', errno = %d\n", ready_timestamp, path, errno);
-		return errno;
-	}
-	if (fclose(f)) {
-		fprintf(stderr, "Could not close ready timestamp file '%s', errno = %d\n", path, errno);
+	sprintf(path, "%s/%s", results_dir, OUT_FILE);
+	*f = fopen(path, "w");
+	if (*f == NULL) {
+		fprintf(stderr, "Could not open out timestamp file '%s', errno = %d\n", path, errno);
 		return errno;
 	}
 	return 0;
@@ -418,6 +424,7 @@ int main(int argc, char *argv[]) {
 			printf("\t%3d: %s > %s 2>&1\n", task_count++, curr->cmd, out_filename);
 		}
 	}
+	printf("\n");
 
 	if (cookie_count > task_count) {
 		fprintf(stderr, "Cannot use more cookies (%d) than tasks (%d)\n", cookie_count, task_count);
@@ -426,7 +433,7 @@ int main(int argc, char *argv[]) {
 
 	struct task_shm *task_shm = NULL;
 	if (cookie_count > 0) {
-		printf("\nCreating shared memory...\n");
+		printf("Creating shared memory ...\n");
 		if (shm_init(&task_shm)) {
 			fprintf(stderr, "Shared memory creation failure\n");
 			exit(1);
@@ -434,8 +441,8 @@ int main(int argc, char *argv[]) {
 		task_shm->cookie_ready_sem = task_count;
 	}
 
-	printf("\nForking tasks...\n");
-	int *children_pids = (int*)malloc(task_count * sizeof(int));
+	printf("Forking tasks ...\n");
+	struct task_info *task_info = (struct task_info*)malloc(task_count * sizeof(*task_info));
 	int task_idx = 0;
 	for (struct task_spec *curr = head; curr != NULL; curr = curr->next) {
 		for (int i = 0; i < curr->count; i++) {
@@ -447,16 +454,22 @@ int main(int argc, char *argv[]) {
 				}
 				exit(1);
 			} else if (c_pid == 0) {
-				if (copy_cookie(cookie_count, task_idx, cookie_count ? children_pids[task_idx % cookie_count] : -1, task_shm)) {
+				if (copy_cookie(cookie_count, task_idx, cookie_count ? task_info[task_idx % cookie_count].pid : -1, task_shm)) {
 					fprintf(stderr, "Failed to copy cookies for task %d with pid %d\n", task_idx, c_pid);
 					exit(1);
 				}
 				exec_task(curr, task_idx, results_dir); // doesn't return
 			} else {
-				children_pids[task_idx] = c_pid;
-				if (create_cookie(cookie_count, task_idx, c_pid, task_shm)) {
-					fprintf(stderr, "Failed to create cookie for task %d with pid %d\n", task_idx, c_pid);
-					exit(1);
+				task_info[task_idx].pid = c_pid;
+				if (cookie_count) {
+					if (task_idx < cookie_count) {
+						if (create_cookie(cookie_count, task_idx, c_pid, task_shm, &task_info[task_idx].cookie)) {
+							fprintf(stderr, "Failed to create cookie for task %d with pid %d\n", task_idx, c_pid);
+							exit(1);
+						}
+					} else {
+						task_info[task_idx].cookie = task_info[task_idx % cookie_count].cookie;
+					}
 				}
 				task_idx++;
 			}
@@ -468,7 +481,7 @@ int main(int argc, char *argv[]) {
 			fprintf(stderr, "Failed to setup cgroup cpu set\n");
 			exit(1);
 		}
-		if (move_tasks_to_cgroup(cgroup, children_pids, task_count)) {
+		if (move_tasks_to_cgroup(cgroup, task_info, task_count)) {
 			fprintf(stderr, "Failed to move tasks to cgroup\n");
 			exit(1);
 		}
@@ -476,7 +489,7 @@ int main(int argc, char *argv[]) {
 
 	uint64_t ready_timestamp = clock_get_time_nsecs();
 	if (cookie_count > 0) {
-		printf("\nWaiting for cookies...\n");
+		printf("Waiting for cookies ...\n");
 		uint64_t timeout = ready_timestamp + 1000000000;
 		while (task_shm->cookie_ready_sem > 0) {
 			if (clock_get_time_nsecs() > timeout) {
@@ -489,18 +502,38 @@ int main(int argc, char *argv[]) {
 		printf("Cookies setup completed at %lu\n", ready_timestamp);
 	}
 
-	printf("\nWriting ready timestamp...\n");
-	if (write_ready_timestamp(results_dir, ready_timestamp)) {
-		fprintf(stderr, "Failed to write ready timestamp\n");
+
+	FILE * out_f;
+	if (open_out_file(results_dir, &out_f)) {
+		fprintf(stderr, "Could not open output file\n");
 		exit(1);
 	}
+	fprintf(out_f, "%d '%s'\n", task_count, cpu_set);
 
-	printf("Waiting for tasks completion...\n");
+	printf("Waiting for tasks completion ...\n");
 	pid_t wpid;
 	int status = 0;
 	while ((wpid = wait(&status)) > 0) {
 		printf("Task %d completed with status %d\n", wpid, status);
+		for (task_idx = 0; task_idx < task_count; task_idx++)
+			if (task_info[task_idx].pid == wpid)
+				break;
+		if (task_idx == task_count) {
+			fprintf(stderr, "Unknown task with pid %d completed\n", wpid);
+			exit(1);
+		}
+		if (fprintf(out_f, "%d %d %llu %lu %d\n", task_idx, task_info[task_idx].pid, task_info[task_idx].cookie, clock_get_time_nsecs(), status) < 0) {
+			fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
+			exit(1);
+		}
 	}
+
+	if (fprintf(out_f, "%lu %lu\n", ready_timestamp, clock_get_time_nsecs()) < 0) {
+		fprintf(stderr, "Could not write execution timestamp %lu, errno = %d\n", ready_timestamp, errno);
+		exit(1);
+	}
+
+	fclose(out_f);
 	printf("Done\n");
 
 	return 0;
