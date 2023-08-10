@@ -16,13 +16,13 @@ Test benchmark to assess the correctness and performance of the scheduler
 
 End-to-end validation script. Example usage:
 
-`./bin/run.sh -t "bin/stress -d 10" -n 16 -c 8 -s "1-4"`
+`./bin/run.sh -t "bin/stress -d 10" -n 16 -c 8 -s "0-3"`
 
 * mount cgroups
 * launches schtest with the following config
  * 16 stressors processes running for 10 seconds
  * 8 cookies
- * 4 cpus
+ * 4 cpus (0-3)
 * trace schtest with perf
 * post process collected data and assert correctness of core scheduling (no overlaps)
 
