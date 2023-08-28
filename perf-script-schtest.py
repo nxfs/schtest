@@ -125,6 +125,7 @@ class Timeline:
         overlap_buckets = defaultdict(lambda: 0)
         self.cpu_timeline = dict(self.cpu_timeline)
         checked_cpus = set()
+        longest_overlap = 0
         for cpu, cpu_timeline in self.cpu_timeline.items():
             if cpu in checked_cpus:
                 continue
@@ -191,9 +192,12 @@ class Timeline:
                             continue
                         if cpu_cookie[c] is not None and cpu_cookie[c] != cpu_cookie[next_cpu] and cpu_cookie_time[c] > cfg.start_ns:
                             overlap = next_time - cpu_cookie_time[c]
-                            overlap_bucket = int(math.log2(overlap + 1))
-                            overlap_buckets[overlap_bucket] += 1
-                            print(f"Overlap of {overlap} between CPU {c} with cookie {cpu_cookie[c]} scheduled in at {cpu_cookie_time[c]} and CPU {next_cpu} with cookie {cpu_cookie[next_cpu]} scheduled out at {next_time}", file=overlap_file)
+                            if overlap > 0:
+                                overlap_bucket = int(math.log2(overlap))
+                                overlap_buckets[overlap_bucket] += 1
+                                print(f"Overlap of {overlap} between CPU {c} with cookie {cpu_cookie[c]} scheduled in at {cpu_cookie_time[c]} and CPU {next_cpu} with cookie {cpu_cookie[next_cpu]} scheduled out at {next_time}", file=overlap_file)
+                            if overlap > longest_overlap:
+                                longest_overlap = overlap
                 # update state
                 cpu_cookie[next_cpu] = next_cookie
                 cpu_cookie_time[next_cpu] = next_time
@@ -201,8 +205,14 @@ class Timeline:
         if len(overlap_buckets) > 0:
             overlap_buckets_keys = list(overlap_buckets.keys())
             overlap_buckets_keys.sort()
-            for b in range(0, overlap_buckets_keys[len(overlap_buckets_keys) - 1] + 1):
-                print(f"Overlap count [{2 ** b}, {2 ** (b + 1)}) ns: {overlap_buckets[b]}",)
+            nano_to_micro = 1000000
+            print(f"Longest overlap: {longest_overlap/nano_to_micro:.1e} ms".replace("e+0", "e+").replace("e-0", "e-"))
+            for b in reversed(range(0, overlap_buckets_keys[len(overlap_buckets_keys) - 1] + 1)):
+                count = overlap_buckets[b]
+                star_count = int(math.log2(count + 1))
+                low_bucket = (2 ** b) / nano_to_micro
+                high_bucket = (2 ** (b + 1)) / nano_to_micro
+                print(f"Overlap count [{low_bucket:.1e}, {high_bucket:.1e}) ms: {count:6d}     {'*' * star_count}".replace("e+0", "e+").replace("e-0", "e-"))
 
         overlap_file.close()
 
