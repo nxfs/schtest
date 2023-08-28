@@ -106,4 +106,5 @@ void print_stress_result(FILE *stream, const struct stress_result &stress_result
 	fprintf(stream, "Total cpu time [s]              = %.3f\n", stress_result.total_cpu_time_secs);
 	fprintf(stream, "Total sleep time [s]            = %.3f\n", stress_result.total_sleep_time_secs);
 	fprintf(stream, "Total lost time [s]             = %.3f\n", stress_result.total_lost_time_secs);
+	fprintf(stream, "Active ratio                    = %.3f\n", stress_result.total_cpu_time_secs / stress_result.total_wall_time_secs);
 }

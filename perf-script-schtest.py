@@ -10,8 +10,10 @@
 from __future__ import print_function
 from collections import defaultdict
 
+import glob
 import math
 import os
+import re
 import sys
 
 sys.path.append(os.environ['PERF_EXEC_PATH'] + \
@@ -216,6 +218,37 @@ class Timeline:
 
         overlap_file.close()
 
+
+    def compute_bogops_count(self):
+        file_pattern = 'fork_*.txt'
+        bogops_pattern = r'^\s*Bogops count\s*=\s*(\d+)\s*$'
+        active_ratio_pattern = r'^\s*Active ratio\s*=\s*(\d+\.\d+)\s*$'
+        matching_files = glob.glob(os.path.join(results_dir, file_pattern))
+        total_bogops_count = 0
+        total_active_ratio = 0
+        for filename in matching_files:
+            bogops_count = None
+            active_ratio = None
+            with open(filename, 'r') as file:
+                for line in file:
+                    match = re.match(bogops_pattern, line)
+                    if match:
+                        bogops_count = int(match.group(1))
+                    match = re.match(active_ratio_pattern, line)
+                    if match:
+                        active_ratio = float(match.group(1))
+            if bogops_count is not None:
+                total_bogops_count += bogops_count
+            else:
+                print(f"Could not find bogops count in {filename}, defaulting to zero")
+            if active_ratio is not None:
+                total_active_ratio += active_ratio
+            else:
+                print(f"Could not find active ratio in {filename}, defaulting to zero")
+        print(f"Total bogops count: {total_bogops_count}")
+        print(f"Average active ratio: {total_active_ratio / len(matching_files):3f}")
+
+
 cfg = None
 timeline = None
 runtimes = {}
@@ -231,6 +264,7 @@ def trace_begin():
 
 def trace_end():
     timeline.check_overlaps()
+    timeline.compute_bogops_count()
 
 
 def sched__sched_stat_runtime(event_name, context, common_cpu,
