@@ -133,18 +133,18 @@ static void exec_task(struct task_spec *spec, int task_idx, char *results_dir) {
 	char *newenviron[] = { NULL };
 	char out_filename[PATH_MAX];
 	get_task_out_filename(results_dir, out_filename, task_idx);
-	int fd = open(out_filename, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+	int fd = open(out_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 	if (fd == -1) {
 		fprintf(stderr, "Unable to redirect stdout/stderr of fork %d with cmd %s at file %s, errno = %d\n", task_idx, spec->cmd, out_filename, errno);
 		exit(1);
 	} else {
 		int rc;
-		rc = dup2(fd, 1); // stdout
+		rc = dup2(fd, STDOUT_FILENO);
 		if (rc == -1) {
 			fprintf(stderr, "Unable to redirect stdout of fork %d with cmd %s at file %s, errno = %d\n", task_idx, spec->cmd, out_filename, errno);
 			exit(1);
 		}
-		rc = dup2(fd, 2); // stderr
+		rc = dup2(fd, STDERR_FILENO);
 		if (rc == -1) {
 			fprintf(stderr, "Unable to redirect stderr of fork %d with cmd %s at file %s, errno = %d\n", task_idx, spec->cmd, out_filename, errno);
 			exit(1);
