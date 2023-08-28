@@ -150,6 +150,7 @@ class Timeline:
                 checked_cpus.add(c)
 
             NO_COOKIE = -1
+            check_overlaps = False
             while(len(cpu_event_iterators.keys()) > 1):
                 # find next event (start/stop running) across all cpus in group
                 next_cpu = None
@@ -170,18 +171,23 @@ class Timeline:
                         next_time = next_cpu_time
                         next_cookie = next_cpu_cookie
 
+                if next_time > cfg.stop_ns:
+                    break
+
+                check_overlaps |= next_time > cfg.start_ns
+
                 # advance event iterator
                 if next_cookie is None:
                     cpu_event_iterators[next_cpu] += 1
                     if cpu_event_iterators[next_cpu] >= len(self.cpu_timeline[next_cpu].runtime_events):
                         del cpu_event_iterators[next_cpu]
 
-                # on schedule out check for overlaps
-                if next_cookie is None:
+                # on schedule out check for overlaps, ignoring early ones before cookies are setup properly
+                if next_cookie is None and check_overlaps:
                     for c in cpu_event_iterators.keys():
                         if c == next_cpu:
                             continue
-                        if cpu_cookie[c] is not None and cpu_cookie[c] != cpu_cookie[next_cpu]:
+                        if cpu_cookie[c] is not None and cpu_cookie[c] != cpu_cookie[next_cpu] and cpu_cookie_time[c] > cfg.start_ns:
                             overlap = next_time - cpu_cookie_time[c]
                             overlap_bucket = int(math.log2(overlap + 1))
                             overlap_buckets[overlap_bucket] += 1
@@ -190,10 +196,11 @@ class Timeline:
                 cpu_cookie[next_cpu] = next_cookie
                 cpu_cookie_time[next_cpu] = next_time
 
-        overlap_buckets_keys = list(overlap_buckets.keys())
-        overlap_buckets_keys.sort()
-        for b in range(0, overlap_buckets_keys[len(overlap_buckets_keys) - 1] + 1):
-            print(f"Overlap count [{2 ** b}, {2 ** (b + 1)}) ns: {overlap_buckets[b]}",)
+        if len(overlap_buckets) > 0:
+            overlap_buckets_keys = list(overlap_buckets.keys())
+            overlap_buckets_keys.sort()
+            for b in range(0, overlap_buckets_keys[len(overlap_buckets_keys) - 1] + 1):
+                print(f"Overlap count [{2 ** b}, {2 ** (b + 1)}) ns: {overlap_buckets[b]}",)
 
 cfg = None
 timeline = None

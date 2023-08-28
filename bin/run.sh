@@ -42,6 +42,6 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 args+=(-g $schtest_cg)
-perf sched record -- ./bin/schtest "${args[@]}" > schtest.out.txt
+perf sched record -k raw -- ./bin/schtest "${args[@]}" > schtest.out.txt
 
 perf script --script perf-script-schtest.py

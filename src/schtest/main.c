@@ -389,7 +389,8 @@ uint64_t clock_get_time_nsecs() {
 	struct timespec ts;
 
 	errno = 0;
-	int rc = clock_gettime(CLOCK_REALTIME, &ts);
+	// must align with the clock used by perf, i.e `perf -k raw`
+	int rc = clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
 
 	if (rc) {
 		fprintf(stderr, "FATAL: clock_gettime returned %d, errno %d\n\n", rc, errno);
