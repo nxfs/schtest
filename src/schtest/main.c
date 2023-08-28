@@ -668,7 +668,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Could not open output file\n");
 		exit(1);
 	}
-	fprintf(out_f, "%s\n", cpu_set);
+	fprintf(out_f, "%s\n", *cpu_set == '\0' ? "empty" : cpu_set);
 	print_cpu_topography(out_f, siblings);
 
 	fprintf(out_f, "%d\n", task_count);

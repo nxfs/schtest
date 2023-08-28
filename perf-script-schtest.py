@@ -45,6 +45,8 @@ class SchtestConfig:
 def parse_cpu_set(cpu_set):
     if len(cpu_set) == 0:
         return None
+    if (cpu_set == "empty\n"):
+        return None
     cpus = set()
     tok = cpu_set.split(',')
     for t in tok:
