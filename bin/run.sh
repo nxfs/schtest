@@ -25,6 +25,7 @@ echo $pid > $schtest_cg/cgroup.procs
 mount -o remount,mode=755 /sys/kernel/debug/tracing/
 
 export results_dir=results
+rm -rf $results_dir
 
 args=()
 # Iterate through each argument
