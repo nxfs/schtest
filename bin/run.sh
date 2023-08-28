@@ -24,6 +24,24 @@ echo $pid > $schtest_cg/cgroup.procs
 
 mount -o remount,mode=755 /sys/kernel/debug/tracing/
 
-perf sched record -- ./bin/schtest "$@ -g $schtest_cg" > schtest.out.txt
+args=()
+# Iterate through each argument
+while [[ $# -gt 0 ]]; do
+    # Check if the argument contains spaces
+    if [[ "$1" == *" "* ]]; then
+        # Preserve double quotes if present
+        if [[ "$1" == \"*\" ]]; then
+            args+=("${1#\"}"  # Remove leading double quote
+                   "${1%\"}") # Remove trailing double quote
+        else
+            args+=("$1")
+        fi
+    else
+        args+=($1)
+    fi
+    shift
+done
+args+=(-g $schtest_cg)
+perf sched record -- ./bin/schtest "${args[@]}" > schtest.out.txt
 
 perf script --script perf-script-schtest.py
