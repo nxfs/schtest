@@ -24,6 +24,8 @@ echo $pid > $schtest_cg/cgroup.procs
 
 mount -o remount,mode=755 /sys/kernel/debug/tracing/
 
+export results_dir=results
+
 args=()
 # Iterate through each argument
 while [[ $# -gt 0 ]]; do
@@ -41,7 +43,7 @@ while [[ $# -gt 0 ]]; do
     fi
     shift
 done
-args+=(-g $schtest_cg)
+args+=(-g $schtest_cg -d $results_dir)
 perf sched record -k raw -- ./bin/schtest "${args[@]}" > schtest.out.txt
 
 perf script --script perf-script-schtest.py

@@ -119,7 +119,9 @@ class Timeline:
         self.cpu_timeline[event.cpu].add_runtime_event(runtime_event)
 
     def check_overlaps(self):
-        print("checking overlaps...")
+        overlap_file_path = f"{results_dir}/overlap_file.txt"
+        overlap_file = open(overlap_file_path, 'w')
+        print(f"checking overlaps, full results will be written at {overlap_file_path}")
         overlap_buckets = defaultdict(lambda: 0)
         self.cpu_timeline = dict(self.cpu_timeline)
         checked_cpus = set()
@@ -191,7 +193,7 @@ class Timeline:
                             overlap = next_time - cpu_cookie_time[c]
                             overlap_bucket = int(math.log2(overlap + 1))
                             overlap_buckets[overlap_bucket] += 1
-                            print(f"Overlap of {overlap} between CPU {c} with cookie {cpu_cookie[c]} scheduled in at {cpu_cookie_time[c]} and CPU {next_cpu} with cookie {cpu_cookie[next_cpu]} scheduled out at {next_time}")
+                            print(f"Overlap of {overlap} between CPU {c} with cookie {cpu_cookie[c]} scheduled in at {cpu_cookie_time[c]} and CPU {next_cpu} with cookie {cpu_cookie[next_cpu]} scheduled out at {next_time}", file=overlap_file)
                 # update state
                 cpu_cookie[next_cpu] = next_cookie
                 cpu_cookie_time[next_cpu] = next_time
@@ -202,9 +204,12 @@ class Timeline:
             for b in range(0, overlap_buckets_keys[len(overlap_buckets_keys) - 1] + 1):
                 print(f"Overlap count [{2 ** b}, {2 ** (b + 1)}) ns: {overlap_buckets[b]}",)
 
+        overlap_file.close()
+
 cfg = None
 timeline = None
 runtimes = {}
+results_dir = os.environ.get('results_dir', '')
 
 
 def trace_begin():
