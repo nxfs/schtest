@@ -431,12 +431,13 @@ int open_out_file(char *results_dir, FILE **f) {
 
 int main(int argc, char *argv[]) {
 	static struct option long_options[] = {
-		{"task",       required_argument, 0, 't'},
-		{"task_count", required_argument, 0, 'n'},
-		{"cgroup",     required_argument, 0, 'g'},
-		{"cpu_set",    required_argument, 0, 's'},
-		{"cookies",    required_argument, 0, 'c'},
-		{"dir",        required_argument, 0, 'd'},
+		{"task",       	 required_argument, 0, 't'},
+		{"task_count", 	 required_argument, 0, 'n'},
+		{"cgroup",     	 required_argument, 0, 'g'},
+		{"cpu_set",    	 required_argument, 0, 's'},
+		{"cookies",    	 required_argument, 0, 'c'},
+		{"dir",        	 required_argument, 0, 'd'},
+		{"fake_cookies", no_argument,       0, 'f'},
 	};
 
 	struct task_spec *next = NULL, *prev = NULL, *head = NULL;
@@ -447,8 +448,9 @@ int main(int argc, char *argv[]) {
 	int c;
 	int option_index = 0;
 	int rc = 0;
+	bool fake_cookies = false;
 	while(!rc) {
-		c = getopt_long(argc, argv, "t:n:g:s:c:d:", long_options, &option_index);
+		c = getopt_long(argc, argv, "t:n:g:s:c:d:f", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -493,6 +495,9 @@ int main(int argc, char *argv[]) {
 			case 'd':
 				rc = parse_string(optarg, PATH_MAX / 2, results_dir);
 				break;
+			case 'f':
+				fake_cookies = true;
+				break;
 			case '?':
 				rc = -EINVAL;
 				break;
@@ -519,14 +524,24 @@ int main(int argc, char *argv[]) {
 
 	if (rc) {
 		fprintf(stderr, "Usage: schtest [TASKS]... [OPTION]...\n");
-		fprintf(stderr, "Executes tasks\n\n");
+		fprintf(stderr, "Executes tasks\n");
 		fprintf(stderr, "\t-t <cmd>\tAdds a task group. Can be used multiple times. Each task in the group is executed by the given <cmd>.\n");
 		fprintf(stderr, "\t-n <N>\t\tThe number of tasks in the group. Each task is executed with the given <cmd> passed with the -t argument.\n");
 		fprintf(stderr, "\t-g <cgroup>\tThe cgroup path. Each task is moved in the corresponding cgroup.\n");
 		fprintf(stderr, "\t-s <cpuset>\tThe cpuset. The cgroup is bound to the given cpuset.\n");
 		fprintf(stderr, "\t-c <N>\t\tThe number of core scheduling cookies. If non-zero, each task is assigned the cookie corresponding to its index modulo the cookie count.\n");
 		fprintf(stderr, "\t-d <dir>\tThe results directory. Defaults to the working directory.\n");
-		fprintf(stderr, "\nExamples:\n\n");
+		fprintf(stderr, "\t-f \t\tUse fake cookies. Cookies won't be set but the generated report will be as if cookies were set. This is useful for a/b testing.\n");
+		fprintf(stderr, "\nResult directory\n");
+		fprintf(stderr, "\tout.txt contains test results in the following format, line by line:\n");
+		fprintf(stderr, "\t\t[cpu set]\n");
+		fprintf(stderr, "\t\t[cpu sibling count]\n");
+		fprintf(stderr, "\t\tFor each cpu sibling group: [cpu_0], [cpu_1], ...\n");
+		fprintf(stderr, "\t\t[process count]\n");
+		fprintf(stderr, "\t\tFor each process: [task_idx] [pid] [cookie] [stop_ns] [exit_code]\n");
+		fprintf(stderr, "\t\t[start_ns] [stop_ns]\n");
+		fprintf(stderr, "\tfork_[task_idx].txt contains the stdout and stderr of each executed task\n");
+		fprintf(stderr, "\nExamples of usage\n");
 		fprintf(stderr, "\tschtest -t \"bin/stress\"");
 		fprintf(stderr, "\n\t\t* Launches bin/stress");
 		fprintf(stderr, "\n\n");
@@ -592,7 +607,10 @@ int main(int argc, char *argv[]) {
 				}
 				exit(1);
 			} else if (c_pid == 0) {
-				if (copy_cookie(cookie_count, task_idx, cookie_count ? task_info[task_idx % cookie_count].pid : -1, task_shm)) {
+				if (fake_cookies && cookie_count > 0) {
+					task_shm->cookie_ready_sem--;
+				}
+				else if (copy_cookie(cookie_count, task_idx, cookie_count ? task_info[task_idx % cookie_count].pid : -1, task_shm)) {
 					fprintf(stderr, "Failed to copy cookies for task %d with pid %d\n", task_idx, c_pid);
 					exit(1);
 				}
@@ -600,13 +618,17 @@ int main(int argc, char *argv[]) {
 			} else {
 				task_info[task_idx].pid = c_pid;
 				if (cookie_count) {
-					if (task_idx < cookie_count) {
-						if (create_cookie(cookie_count, task_idx, c_pid, task_shm, &task_info[task_idx].cookie)) {
-							fprintf(stderr, "Failed to create cookie for task %d with pid %d\n", task_idx, c_pid);
-							exit(1);
-						}
+					if (fake_cookies) {
+						task_info[task_idx].cookie = (task_idx % cookie_count) + 1;
 					} else {
-						task_info[task_idx].cookie = task_info[task_idx % cookie_count].cookie;
+						if (task_idx < cookie_count) {
+							if (create_cookie(cookie_count, task_idx, c_pid, task_shm, &task_info[task_idx].cookie)) {
+								fprintf(stderr, "Failed to create cookie for task %d with pid %d\n", task_idx, c_pid);
+								exit(1);
+							}
+						} else {
+							task_info[task_idx].cookie = task_info[task_idx % cookie_count].cookie;
+						}
 					}
 				}
 				task_idx++;
