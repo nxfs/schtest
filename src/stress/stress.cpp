@@ -95,13 +95,13 @@ struct stress_result stress(const struct stress_cfg &stress_cfg) {
 void print_stress_result(FILE *stream, const struct stress_result &stress_result) {
 	fprintf(stream, "Stress result\n");
 	fprintf(stream, "Task count                      = %lu\n", stress_result.task_count);
-	fprintf(stream, "Task duration [ms]              = %.3f\n", stress_result.total_cpu_time_secs * 1000.0 / (double)(stress_result.task_count));
+	fprintf(stream, "Task avg duration [ms]          = %.3f\n", stress_result.total_cpu_time_secs * 1000.0 / (double)(stress_result.task_count));
 	fprintf(stream, "Task rate (cpu time) [/s]       = %.3f\n", (double)(stress_result.task_count) / stress_result.total_cpu_time_secs);
 	fprintf(stream, "Task rate (wall time) [/s]      = %.3f\n", (double)(stress_result.task_count) / stress_result.total_wall_time_secs);
-	fprintf(stream, "Task item count                 = %lu\n", stress_result.task_item_count);
-	fprintf(stream, "Task item duration [ms]         = %.3f\n", stress_result.total_cpu_time_secs * 1000.0 / (double)(stress_result.task_item_count));
-	fprintf(stream, "Task item rate (cpu time) [/s]  = %.3f\n", (double)(stress_result.task_item_count) / stress_result.total_cpu_time_secs);
-	fprintf(stream, "Task item rate (wall time) [/s] = %.3f\n", (double)(stress_result.task_item_count) / stress_result.total_wall_time_secs);
+	fprintf(stream, "Bogops count                    = %lu\n", stress_result.task_item_count);
+	fprintf(stream, "Bogops avg duration [ms]        = %.3f\n", stress_result.total_cpu_time_secs * 1000.0 / (double)(stress_result.task_item_count));
+	fprintf(stream, "Bogops rate (cpu time) [/s]     = %.3f\n", (double)(stress_result.task_item_count) / stress_result.total_cpu_time_secs);
+	fprintf(stream, "Bogops rate (wall time) [/s]    = %.3f\n", (double)(stress_result.task_item_count) / stress_result.total_wall_time_secs);
 	fprintf(stream, "Total wall time [s]             = %.3f\n", stress_result.total_wall_time_secs);
 	fprintf(stream, "Total cpu time [s]              = %.3f\n", stress_result.total_cpu_time_secs);
 	fprintf(stream, "Total sleep time [s]            = %.3f\n", stress_result.total_sleep_time_secs);
