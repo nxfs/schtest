@@ -79,6 +79,27 @@ static int make_results_dir(char *results_dir) {
 	return 0;
 }
 
+static int parse_double(const char *str, double *val) {
+	if (!str)
+		return -EINVAL;
+
+	char *endptr;
+
+	errno = 0;
+	double parsed;
+	parsed = strtod(str, &endptr);
+
+	if (errno != 0)
+		return errno;
+
+	if (endptr == NULL || '\0' != *endptr)
+		return -EINVAL;
+
+	*val = parsed;
+
+	return 0;
+}
+
 static uint32_t parse_uint32_t(const char *str, uint32_t *val) {
 	if (!str)
 		return -EINVAL;
@@ -438,6 +459,7 @@ int main(int argc, char *argv[]) {
 		{"cookies",    	 required_argument, 0, 'c'},
 		{"dir",        	 required_argument, 0, 'd'},
 		{"fake_cookies", no_argument,       0, 'f'},
+		{"duration",     required_argument, 0, 'd'},
 	};
 
 	struct task_spec *next = NULL, *prev = NULL, *head = NULL;
@@ -449,8 +471,9 @@ int main(int argc, char *argv[]) {
 	int option_index = 0;
 	int rc = 0;
 	bool fake_cookies = false;
+	double duration = 0;
 	while(!rc) {
-		c = getopt_long(argc, argv, "t:n:g:s:c:d:f", long_options, &option_index);
+		c = getopt_long(argc, argv, "t:n:g:s:c:D:fd:", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -492,11 +515,14 @@ int main(int argc, char *argv[]) {
 			case 'c':
 				rc = parse_uint32_t(optarg, &cookie_count);
 				break;
-			case 'd':
+			case 'D':
 				rc = parse_string(optarg, PATH_MAX / 2, results_dir);
 				break;
 			case 'f':
 				fake_cookies = true;
+				break;
+			case 'd':
+				rc = parse_double(optarg, &duration);
 				break;
 			case '?':
 				rc = -EINVAL;
@@ -530,8 +556,9 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "\t-g <cgroup>\tThe cgroup path. Each task is moved in the corresponding cgroup.\n");
 		fprintf(stderr, "\t-s <cpuset>\tThe cpuset. The cgroup is bound to the given cpuset.\n");
 		fprintf(stderr, "\t-c <N>\t\tThe number of core scheduling cookies. If non-zero, each task is assigned the cookie corresponding to its index modulo the cookie count.\n");
-		fprintf(stderr, "\t-d <dir>\tThe results directory. Defaults to the working directory.\n");
+		fprintf(stderr, "\t-D <dir>\tThe results directory. Defaults to the working directory.\n");
 		fprintf(stderr, "\t-f \t\tUse fake cookies. Cookies won't be set but the generated report will be as if cookies were set. This is useful for a/b testing.\n");
+		fprintf(stderr, "\t-d <duration>\t\tThe total duration of the test. Default is 0s, in which case it waits for all tasks to exit.\n");
 		fprintf(stderr, "\nResult directory\n");
 		fprintf(stderr, "\tout.txt contains test results in the following format, line by line:\n");
 		fprintf(stderr, "\t\t[cpu set]\n");
@@ -670,22 +697,59 @@ int main(int argc, char *argv[]) {
 	}
 	fprintf(out_f, "%s\n", *cpu_set == '\0' ? "empty" : cpu_set);
 	print_cpu_topography(out_f, siblings);
-
 	fprintf(out_f, "%d\n", task_count);
+
 	printf("Waiting for tasks completion ...\n");
-	pid_t wpid;
-	int status = 0;
-	while ((wpid = wait(&status)) > 0) {
-		printf("Task %d completed with status %d\n", wpid, status);
-		for (task_idx = 0; task_idx < task_count; task_idx++)
-			if (task_info[task_idx].pid == wpid)
-				break;
-		if (task_idx == task_count) {
-			fprintf(stderr, "Unknown task with pid %d completed\n", wpid);
+	sigset_t mask, orig_mask;
+	sigemptyset (&mask);
+	sigaddset (&mask, SIGCHLD);
+	rc = sigprocmask(SIG_BLOCK, &mask, &orig_mask);
+	if (rc) {
+		fprintf(stderr, "Failed to add SIGCHILD to sigprocmask, rc = %d\n", rc);
+		return 1;
+	}
+	int waiting_count = task_count;
+	struct timespec timeout;
+	timeout.tv_sec = (int)duration;
+	timeout.tv_nsec = (int)((duration - timeout.tv_sec) * 1000000000);
+	while (waiting_count) {
+		siginfo_t info;
+		rc = sigtimedwait(&mask, &info, &timeout);
+		if (rc > 0) {
+			if (info.si_signo == SIGCHLD) {
+				int status;
+				pid_t terminated_pid = waitpid(info.si_pid, &status, 0);
+				if (terminated_pid != -1) {
+					for (task_idx = 0; task_idx < task_count; task_idx++)
+						if (task_info[task_idx].pid == terminated_pid)
+							break;
+					if (task_idx == task_count) {
+						fprintf(stderr, "Unknown child process with pid %d terminated\n", terminated_pid);
+						exit(1);
+					}
+					printf("Task %d completed with status %d\n", terminated_pid, status);
+					if (fprintf(out_f, "%d %d %llu %lu %d\n", task_idx, task_info[task_idx].pid, task_info[task_idx].cookie, clock_get_time_nsecs(), status) < 0) {
+						fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
+						exit(1);
+					}
+					waiting_count--;
+				} else {
+					fprintf(stderr, "Waitpid error for %d, errno = %d\n", task_info[task_idx].pid, errno);
+					exit(1);
+				}
+
+			} else {
+				fprintf(stderr, "Received unexpected signal %d\n", info.si_signo);
+				exit(1);
+			}
+		} else if (errno == EINTR) {
+			fprintf(stderr, "Interrupted while waiting for children\n");
 			exit(1);
-		}
-		if (fprintf(out_f, "%d %d %llu %lu %d\n", task_idx, task_info[task_idx].pid, task_info[task_idx].cookie, clock_get_time_nsecs(), status) < 0) {
-			fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
+		} else if (errno == EAGAIN) {
+			fprintf(stderr, "Timeout while waiting for children\n");
+			exit(1);
+		} else {
+			fprintf(stderr, "Error %d while waiting for children\n", errno);
 			exit(1);
 		}
 	}
