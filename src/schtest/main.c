@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #define CPU_SET_LENGTH 32
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
 /*
  * Format:
@@ -43,6 +44,7 @@ struct task_shm {
 struct task_info {
 	int pid;
 	unsigned long long cookie;
+	bool running;
 };
 
 struct cpu_group {
@@ -76,27 +78,6 @@ static int make_results_dir(char *results_dir) {
 			return -EPERM;
 		}
 	}
-	return 0;
-}
-
-static int parse_double(const char *str, double *val) {
-	if (!str)
-		return -EINVAL;
-
-	char *endptr;
-
-	errno = 0;
-	double parsed;
-	parsed = strtod(str, &endptr);
-
-	if (errno != 0)
-		return errno;
-
-	if (endptr == NULL || '\0' != *endptr)
-		return -EINVAL;
-
-	*val = parsed;
-
 	return 0;
 }
 
@@ -471,7 +452,7 @@ int main(int argc, char *argv[]) {
 	int option_index = 0;
 	int rc = 0;
 	bool fake_cookies = false;
-	double duration = 0;
+	uint32_t duration = 0;
 	while(!rc) {
 		c = getopt_long(argc, argv, "t:n:g:s:c:D:fd:", long_options, &option_index);
 
@@ -522,7 +503,7 @@ int main(int argc, char *argv[]) {
 				fake_cookies = true;
 				break;
 			case 'd':
-				rc = parse_double(optarg, &duration);
+				rc = parse_uint32_t(optarg, &duration);
 				break;
 			case '?':
 				rc = -EINVAL;
@@ -558,7 +539,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "\t-c <N>\t\tThe number of core scheduling cookies. If non-zero, each task is assigned the cookie corresponding to its index modulo the cookie count.\n");
 		fprintf(stderr, "\t-D <dir>\tThe results directory. Defaults to the working directory.\n");
 		fprintf(stderr, "\t-f \t\tUse fake cookies. Cookies won't be set but the generated report will be as if cookies were set. This is useful for a/b testing.\n");
-		fprintf(stderr, "\t-d <duration>\t\tThe total duration of the test. Default is 0s, in which case it waits for all tasks to exit.\n");
+		fprintf(stderr, "\t-d <duration>\t\tThe total duration of the test in seconds. Default is 0, in which case it waits for all tasks to exit.\n");
 		fprintf(stderr, "\nResult directory\n");
 		fprintf(stderr, "\tout.txt contains test results in the following format, line by line:\n");
 		fprintf(stderr, "\t\t[cpu set]\n");
@@ -644,6 +625,7 @@ int main(int argc, char *argv[]) {
 				exec_task(curr, task_idx, results_dir); // doesn't return
 			} else {
 				task_info[task_idx].pid = c_pid;
+				task_info[task_idx].running = true;
 				if (cookie_count) {
 					if (fake_cookies) {
 						task_info[task_idx].cookie = (task_idx % cookie_count) + 1;
@@ -709,12 +691,13 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	int waiting_count = task_count;
-	struct timespec timeout;
-	timeout.tv_sec = (int)duration;
-	timeout.tv_nsec = (int)((duration - timeout.tv_sec) * 1000000000);
+	time_t timeout_epoch = time(NULL) + duration + 1;
+	bool killed = false;
 	while (waiting_count) {
 		siginfo_t info;
-		rc = sigtimedwait(&mask, &info, &timeout);
+		struct timespec timeout;
+		timeout.tv_sec = MAX(timeout_epoch - time(NULL), 1);
+		rc = sigtimedwait(&mask, &info, duration > 0 || killed ? &timeout : NULL);
 		if (rc > 0) {
 			if (info.si_signo == SIGCHLD) {
 				int status;
@@ -727,6 +710,7 @@ int main(int argc, char *argv[]) {
 						fprintf(stderr, "Unknown child process with pid %d terminated\n", terminated_pid);
 						exit(1);
 					}
+					task_info[task_idx].running = false;
 					printf("Task %d completed with status %d\n", terminated_pid, status);
 					if (fprintf(out_f, "%d %d %llu %lu %d\n", task_idx, task_info[task_idx].pid, task_info[task_idx].cookie, clock_get_time_nsecs(), status) < 0) {
 						fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
@@ -746,8 +730,18 @@ int main(int argc, char *argv[]) {
 			fprintf(stderr, "Interrupted while waiting for children\n");
 			exit(1);
 		} else if (errno == EAGAIN) {
-			fprintf(stderr, "Timeout while waiting for children\n");
-			exit(1);
+			if (killed) {
+				fprintf(stderr, "Timed out while waiting for children\n");
+				exit(1);
+			} else {
+				fprintf(stdout, "Test duration elapsed, sending SIGINT to remaining children...\n");
+				for (task_idx = 0; task_idx < task_count; task_idx++) {
+					if (task_info[task_idx].running) {
+						kill(task_info[task_idx].pid, SIGINT);
+					}
+				}
+				killed = true;
+			}
 		} else {
 			fprintf(stderr, "Error %d while waiting for children\n", errno);
 			exit(1);

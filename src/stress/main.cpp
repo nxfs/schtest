@@ -62,7 +62,7 @@ void handle_sigint(int signum) {
 int main(int argc, char *argv[]) {
 	std::signal(SIGINT, handle_sigint);
 
-	double total_duration_secs = 1.0;
+	double total_duration_secs = 0.0;
 	double period_secs = 0.02;
 	uint32_t task_weight = 250u;
 	double period_variance = 0.5;
@@ -117,7 +117,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Run bogops at a fixed, randomized arrival rate.\n");
 		fprintf(stderr, "\t-p <period>\t\tThe period of arrival. Default 20ms.\n");
 		fprintf(stderr, "\t-w <weight>\t\tThe weight of the task, in number of bogops. The execution speed is machine specific and needs calibration. Default 250.\n");
-		fprintf(stderr, "\t-d <duration>\t\tThe total duration of the test. Default 1s. 0s is infinite loop.\n");
+		fprintf(stderr, "\t-d <duration>\t\tThe total duration of the test in seconds. Default is 0, which is infinite loop until SIGINT is received.\n");
 		fprintf(stderr, "\t-P <period variance>\tThe variance of the periods of arrival. Default 0.5.\n");
 		fprintf(stderr, "\t-W <weight variance>\tThe variance of the weights. Default 0.5.\n");
 		fprintf(stderr, "\n");
