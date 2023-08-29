@@ -39,7 +39,7 @@ void default_bogops() {
 	}
 }
 
-struct stress_result stress(const struct stress_cfg &stress_cfg) {
+struct stress_result stress(const struct stress_cfg &stress_cfg, bool &interrupted) {
 	uint64_t task_item_count = 0;
 	uint64_t task_count = 0;
 	uint64_t total_wall_time_nsecs = 0;
@@ -67,7 +67,7 @@ struct stress_result stress(const struct stress_cfg &stress_cfg) {
 
 		uint64_t now_nsecs = clock_get_real_time_nsecs();
 
-		if (now_nsecs > end_time_nsecs)
+		if (interrupted || (stress_cfg.total_duration_secs > 0 && now_nsecs > end_time_nsecs))
 			break;
 
 		if (next_task_arrival_nsecs <= now_nsecs) {
@@ -77,7 +77,7 @@ struct stress_result stress(const struct stress_cfg &stress_cfg) {
 			total_sleep_time_nsecs += sleep_time_nsecs;
 			sleep_nsecs(sleep_time_nsecs);
 		}
-	} while(next_task_arrival_nsecs < end_time_nsecs);
+	} while(!interrupted && (stress_cfg.total_duration_secs == 0 || next_task_arrival_nsecs < end_time_nsecs));
 
 	uint64_t now_nsecs = clock_get_real_time_nsecs();
 	uint64_t now_cpu_nsecs = clock_get_cpu_time_nsecs();

@@ -22,4 +22,4 @@ struct stress_result {
 
 void default_bogops();
 void print_stress_result(FILE *stream, const struct stress_result &stress_result);
-struct stress_result stress(const struct stress_cfg &stress_cfg);
+struct stress_result stress(const struct stress_cfg &stress_cfg, bool &interrupted);
