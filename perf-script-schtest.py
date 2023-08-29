@@ -248,6 +248,7 @@ class Timeline:
             else:
                 print(f"Could not find active ratio in {filename}, defaulting to zero")
         print(f"Total bogops count: {total_bogops_count}")
+        print(f"Average bogops count: {total_bogops_count / len(matching_files):0f}")
         print(f"Average active ratio: {total_active_ratio / len(matching_files):3f}")
 
 
