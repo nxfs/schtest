@@ -431,6 +431,78 @@ int open_out_file(char *results_dir, FILE **f) {
 	return 0;
 }
 
+static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *task_info, FILE *out_f) {
+	int rc;
+	int task_idx;
+
+	printf("Waiting for tasks completion ...\n");
+	sigset_t mask, orig_mask;
+	sigemptyset (&mask);
+	sigaddset (&mask, SIGCHLD);
+	rc = sigprocmask(SIG_BLOCK, &mask, &orig_mask);
+	if (rc) {
+		fprintf(stderr, "Failed to add SIGCHILD to sigprocmask, rc = %d\n", rc);
+		exit(1);
+	}
+	int waiting_count = task_count;
+	time_t timeout_epoch = time(NULL) + duration + 1;
+	bool killed = false;
+	while (waiting_count) {
+		siginfo_t info;
+		struct timespec timeout;
+		timeout.tv_sec = MAX(timeout_epoch - time(NULL), 1);
+		rc = sigtimedwait(&mask, &info, duration > 0 || killed ? &timeout : NULL);
+		if (rc > 0) {
+			if (info.si_signo == SIGCHLD) {
+				int status;
+				pid_t terminated_pid = waitpid(info.si_pid, &status, 0);
+				if (terminated_pid != -1) {
+					for (task_idx = 0; task_idx < task_count; task_idx++)
+						if (task_info[task_idx].pid == terminated_pid)
+							break;
+					if (task_idx == task_count) {
+						fprintf(stderr, "Unknown child process with pid %d terminated\n", terminated_pid);
+						exit(1);
+					}
+					task_info[task_idx].running = false;
+					printf("Task %d completed with status %d\n", terminated_pid, status);
+					if (fprintf(out_f, "%d %d %llu %lu %d\n", task_idx, task_info[task_idx].pid, task_info[task_idx].cookie, clock_get_time_nsecs(), status) < 0) {
+						fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
+						exit(1);
+					}
+					waiting_count--;
+				} else {
+					fprintf(stderr, "Waitpid error for %d, errno = %d\n", task_info[task_idx].pid, errno);
+					exit(1);
+				}
+
+			} else {
+				fprintf(stderr, "Received unexpected signal %d\n", info.si_signo);
+				exit(1);
+			}
+		} else if (errno == EINTR) {
+			fprintf(stderr, "Interrupted while waiting for children\n");
+			exit(1);
+		} else if (errno == EAGAIN) {
+			if (killed) {
+				fprintf(stderr, "Timed out while waiting for children\n");
+				exit(1);
+			} else {
+				fprintf(stdout, "Test duration elapsed, sending SIGINT to remaining children...\n");
+				for (task_idx = 0; task_idx < task_count; task_idx++) {
+					if (task_info[task_idx].running) {
+						kill(task_info[task_idx].pid, SIGINT);
+					}
+				}
+				killed = true;
+			}
+		} else {
+			fprintf(stderr, "Error %d while waiting for children\n", errno);
+			exit(1);
+		}
+	}
+}
+
 int main(int argc, char *argv[]) {
 	static struct option long_options[] = {
 		{"task",       	 required_argument, 0, 't'},
@@ -681,72 +753,7 @@ int main(int argc, char *argv[]) {
 	print_cpu_topography(out_f, siblings);
 	fprintf(out_f, "%d\n", task_count);
 
-	printf("Waiting for tasks completion ...\n");
-	sigset_t mask, orig_mask;
-	sigemptyset (&mask);
-	sigaddset (&mask, SIGCHLD);
-	rc = sigprocmask(SIG_BLOCK, &mask, &orig_mask);
-	if (rc) {
-		fprintf(stderr, "Failed to add SIGCHILD to sigprocmask, rc = %d\n", rc);
-		return 1;
-	}
-	int waiting_count = task_count;
-	time_t timeout_epoch = time(NULL) + duration + 1;
-	bool killed = false;
-	while (waiting_count) {
-		siginfo_t info;
-		struct timespec timeout;
-		timeout.tv_sec = MAX(timeout_epoch - time(NULL), 1);
-		rc = sigtimedwait(&mask, &info, duration > 0 || killed ? &timeout : NULL);
-		if (rc > 0) {
-			if (info.si_signo == SIGCHLD) {
-				int status;
-				pid_t terminated_pid = waitpid(info.si_pid, &status, 0);
-				if (terminated_pid != -1) {
-					for (task_idx = 0; task_idx < task_count; task_idx++)
-						if (task_info[task_idx].pid == terminated_pid)
-							break;
-					if (task_idx == task_count) {
-						fprintf(stderr, "Unknown child process with pid %d terminated\n", terminated_pid);
-						exit(1);
-					}
-					task_info[task_idx].running = false;
-					printf("Task %d completed with status %d\n", terminated_pid, status);
-					if (fprintf(out_f, "%d %d %llu %lu %d\n", task_idx, task_info[task_idx].pid, task_info[task_idx].cookie, clock_get_time_nsecs(), status) < 0) {
-						fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
-						exit(1);
-					}
-					waiting_count--;
-				} else {
-					fprintf(stderr, "Waitpid error for %d, errno = %d\n", task_info[task_idx].pid, errno);
-					exit(1);
-				}
-
-			} else {
-				fprintf(stderr, "Received unexpected signal %d\n", info.si_signo);
-				exit(1);
-			}
-		} else if (errno == EINTR) {
-			fprintf(stderr, "Interrupted while waiting for children\n");
-			exit(1);
-		} else if (errno == EAGAIN) {
-			if (killed) {
-				fprintf(stderr, "Timed out while waiting for children\n");
-				exit(1);
-			} else {
-				fprintf(stdout, "Test duration elapsed, sending SIGINT to remaining children...\n");
-				for (task_idx = 0; task_idx < task_count; task_idx++) {
-					if (task_info[task_idx].running) {
-						kill(task_info[task_idx].pid, SIGINT);
-					}
-				}
-				killed = true;
-			}
-		} else {
-			fprintf(stderr, "Error %d while waiting for children\n", errno);
-			exit(1);
-		}
-	}
+	wait_for_tasks(task_count, duration, task_info, out_f);
 
 	if (fprintf(out_f, "%lu %lu\n", ready_timestamp, clock_get_time_nsecs()) < 0) {
 		fprintf(stderr, "Could not write execution timestamp %lu, errno = %d\n", ready_timestamp, errno);
