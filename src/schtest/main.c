@@ -20,15 +20,6 @@
 #define CPU_SET_LENGTH 32
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
-/*
- * Format:
- * [cpu set]
- * [cpu sibling count]
- * For each cpu sibling list: [cpu_0] [cpu_1] ..
- * [process count]
- * For each process: [task_idx] [pid] [cookie] [stop_ns] [exit_code]
- * [start_ns] [stop_ns]
- */
 static const char *OUT_FILE = "out.txt";
 
 struct task_spec {
