@@ -55,6 +55,40 @@ struct task_info {
 	struct proc_pid_schedstat schedstat;
 };
 
+void print_usage(FILE * out) {
+	fprintf(out, "Usage: schtest [TASKS]... [OPTION]...\n");
+	fprintf(out, "Executes tasks\n");
+	fprintf(out, "\t-t <cmd>\tAdds a task group. Can be used multiple times. Each task in the group is executed by the given <cmd>.\n");
+	fprintf(out, "\t-n <N>\t\tThe number of tasks in the group. Each task is executed with the given <cmd> passed with the -t argument.\n");
+	fprintf(out, "\t-g <cgroup>\tThe cgroup path. Each task is moved in the corresponding cgroup.\n");
+	fprintf(out, "\t-s <cpuset>\tThe cpuset. The cgroup is bound to the given cpuset.\n");
+	fprintf(out, "\t-c <N>\t\tThe number of core scheduling cookies. If non-zero, each task is assigned the cookie corresponding to its index modulo the cookie count.\n");
+	fprintf(out, "\t-D <dir>\tThe results directory. Defaults to the working directory.\n");
+	fprintf(out, "\t-f \t\tUse fake cookies. Cookies won't be set but the generated report will be as if cookies were set. This is useful for a/b testing.\n");
+	fprintf(out, "\t-d <duration>\t\tThe total duration of the test in seconds. Default is 0, in which case it waits for all tasks to exit.\n");
+	fprintf(out, "\nResult directory\n");
+	fprintf(out, "\tout.txt contains test results in the following format, line by line:\n");
+	fprintf(out, "\t\t[cpu set]\n");
+	fprintf(out, "\t\t[cpu sibling count]\n");
+	fprintf(out, "\t\tFor each cpu sibling group: [cpu_0], [cpu_1], ...\n");
+	fprintf(out, "\t\t[process count]\n");
+	fprintf(out, "\t\tFor each process: [task_idx] [pid] [cookie] [stop_ns] [exit_code] [cpu_time_ns] [runq_wait_time_ns]\n");
+	fprintf(out, "\t\t\tcpu_time and runq_wait time will only be available if schtest interrupts the task; in other words the task must run for longer than the test duration\n");
+	fprintf(out, "\t\t[start_ns] [stop_ns]\n");
+	fprintf(out, "\tfork_[task_idx].txt contains the stdout and stderr of each executed task\n");
+	fprintf(out, "\nExamples of usage\n");
+	fprintf(out, "\tschtest -t \"bin/stress\"");
+	fprintf(out, "\n\t\t* Launches bin/stress");
+	fprintf(out, "\n\n");
+	fprintf(out, "\tschtest -t \"bin/stress -d 20\" -t \"bin/stress -d 10\" -n 3 -g \"cgroup2/schtest\" -s \"1-12\" -c 2");
+	fprintf(out, "\n\t\t* Launches 1 x \"bin/stress -d 20\" and 3 x \"bin/stress -d 10\"");
+	fprintf(out, "\n\t\t* Move launched processes to the cgroup cgroup2/schtest");
+	fprintf(out, "\n\t\t* Assign the cpuset \"1-12\" to the cgroup");
+	fprintf(out, "\n\t\t* Create two cookies and assign them to the four launched processes, using round robin assignment");
+	fprintf(out, "\n\t\t  Each even numbered task will get the first cookie and each odd numbered task will get the second cookie");
+	fprintf(out, "\n\n");
+}
+
 static void get_task_out_filename(char *results_dir, char *out_filename, int task_idx) {
 	sprintf(out_filename, "%s/fork_%03d.txt", results_dir, task_idx);
 }
@@ -627,38 +661,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (rc) {
-		fprintf(stderr, "Usage: schtest [TASKS]... [OPTION]...\n");
-		fprintf(stderr, "Executes tasks\n");
-		fprintf(stderr, "\t-t <cmd>\tAdds a task group. Can be used multiple times. Each task in the group is executed by the given <cmd>.\n");
-		fprintf(stderr, "\t-n <N>\t\tThe number of tasks in the group. Each task is executed with the given <cmd> passed with the -t argument.\n");
-		fprintf(stderr, "\t-g <cgroup>\tThe cgroup path. Each task is moved in the corresponding cgroup.\n");
-		fprintf(stderr, "\t-s <cpuset>\tThe cpuset. The cgroup is bound to the given cpuset.\n");
-		fprintf(stderr, "\t-c <N>\t\tThe number of core scheduling cookies. If non-zero, each task is assigned the cookie corresponding to its index modulo the cookie count.\n");
-		fprintf(stderr, "\t-D <dir>\tThe results directory. Defaults to the working directory.\n");
-		fprintf(stderr, "\t-f \t\tUse fake cookies. Cookies won't be set but the generated report will be as if cookies were set. This is useful for a/b testing.\n");
-		fprintf(stderr, "\t-d <duration>\t\tThe total duration of the test in seconds. Default is 0, in which case it waits for all tasks to exit.\n");
-		fprintf(stderr, "\nResult directory\n");
-		fprintf(stderr, "\tout.txt contains test results in the following format, line by line:\n");
-		fprintf(stderr, "\t\t[cpu set]\n");
-		fprintf(stderr, "\t\t[cpu sibling count]\n");
-		fprintf(stderr, "\t\tFor each cpu sibling group: [cpu_0], [cpu_1], ...\n");
-		fprintf(stderr, "\t\t[process count]\n");
-		fprintf(stderr, "\t\tFor each process: [task_idx] [pid] [cookie] [stop_ns] [exit_code] [cpu_time_ns] [runq_wait_time_ns]\n");
-		fprintf(stderr, "\t\t\ncpu_time and runq_wait time will only be available if schtest interrupts the task; in other words the task must run for longer than the test duration\n");
-		fprintf(stderr, "\t\t[start_ns] [stop_ns]\n");
-		fprintf(stderr, "\tfork_[task_idx].txt contains the stdout and stderr of each executed task\n");
-		fprintf(stderr, "\nExamples of usage\n");
-		fprintf(stderr, "\tschtest -t \"bin/stress\"");
-		fprintf(stderr, "\n\t\t* Launches bin/stress");
-		fprintf(stderr, "\n\n");
-		fprintf(stderr, "\tschtest -t \"bin/stress -d 20\" -t \"bin/stress -d 10\" -n 3 -g \"cgroup2/schtest\" -s \"1-12\" -c 2");
-		fprintf(stderr, "\n\t\t* Launches 1 x \"bin/stress -d 20\" and 3 x \"bin/stress -d 10\"");
-		fprintf(stderr, "\n\t\t* Move launched processes to the cgroup cgroup2/schtest");
-		fprintf(stderr, "\n\t\t* Assign the cpuset \"1-12\" to the cgroup");
-		fprintf(stderr, "\n\t\t* Create two cookies and assign them to the four launched processes, using round robin assignment");
-		fprintf(stderr, "\n\t\t  Each even numbered task will get the first cookie and each odd numbered task will get the second cookie");
-		fprintf(stderr, "\n\n");
-
+		print_usage(stderr);
 		exit(rc);
 	}
 
