@@ -49,7 +49,7 @@ struct stress_result stress(const struct stress_cfg &stress_cfg, bool &interrupt
 
 	uint64_t start_time_nsecs = clock_get_real_time_nsecs();
 	uint64_t start_time_cpu_nsecs = clock_get_cpu_time_nsecs();
-	uint64_t end_time_nsecs = start_time_nsecs + stress_cfg.total_duration_secs * 1000000000;
+	uint64_t end_time_nsecs = stress_cfg.total_duration_secs == 0 ? UINT64_MAX : start_time_nsecs + stress_cfg.total_duration_secs * 1000000000;
 	uint64_t next_task_arrival_nsecs = start_time_nsecs;
 
 	do {
@@ -67,7 +67,7 @@ struct stress_result stress(const struct stress_cfg &stress_cfg, bool &interrupt
 
 		uint64_t now_nsecs = clock_get_real_time_nsecs();
 
-		if (interrupted || (stress_cfg.total_duration_secs > 0 && now_nsecs > end_time_nsecs))
+		if (interrupted || now_nsecs > end_time_nsecs)
 			break;
 
 		if (next_task_arrival_nsecs <= now_nsecs) {
@@ -77,7 +77,7 @@ struct stress_result stress(const struct stress_cfg &stress_cfg, bool &interrupt
 			total_sleep_time_nsecs += sleep_time_nsecs;
 			sleep_nsecs(sleep_time_nsecs);
 		}
-	} while(!interrupted && (stress_cfg.total_duration_secs == 0 || next_task_arrival_nsecs < end_time_nsecs));
+	} while(!interrupted && next_task_arrival_nsecs < end_time_nsecs);
 
 	uint64_t now_nsecs = clock_get_real_time_nsecs();
 	uint64_t now_cpu_nsecs = clock_get_cpu_time_nsecs();
