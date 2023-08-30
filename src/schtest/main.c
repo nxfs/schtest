@@ -32,12 +32,6 @@ struct task_shm {
 	atomic_int cookie_ready_sem;
 };
 
-struct task_info {
-	int pid;
-	unsigned long long cookie;
-	bool running;
-};
-
 struct cpu_group {
 	struct cpu_node *cpu_list;
 	struct cpu_group *next;
@@ -46,6 +40,19 @@ struct cpu_group {
 struct cpu_node {
 	int cpu;
 	struct cpu_node *next;
+};
+
+struct proc_pid_schedstat {
+	unsigned long int cpu_time;
+	unsigned long int runq_wait_time;
+	unsigned long int timeslices;
+};
+
+struct task_info {
+	int pid;
+	unsigned long long cookie;
+	bool running;
+	struct proc_pid_schedstat schedstat;
 };
 
 static void get_task_out_filename(char *results_dir, char *out_filename, int task_idx) {
@@ -422,7 +429,21 @@ int open_out_file(char *results_dir, FILE **f) {
 	return 0;
 }
 
-static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *task_info, FILE *out_f) {
+struct proc_pid_schedstat fetch_proc_pid_schedstat(int pid) {
+	struct proc_pid_schedstat schedstat = {0};
+	char path[PATH_MAX];
+	sprintf(path, "/proc/%d/schedstat", pid);
+	FILE *f = fopen(path, "r");
+	if (f != NULL) {
+		fscanf(f, "%lu %lu %lu", &schedstat.cpu_time, &schedstat.runq_wait_time, &schedstat.timeslices);
+		fclose(f);
+	} else {
+		fprintf(stderr, "Failed to read schedstat at %s\n", path);
+	}
+	return schedstat;
+}
+
+void wait_for_tasks(int task_count, uint32_t duration, struct task_info *task_info, FILE *out_f) {
 	int rc;
 	int task_idx;
 
@@ -456,8 +477,19 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 						exit(1);
 					}
 					task_info[task_idx].running = false;
-					printf("Task %d completed with status %d\n", terminated_pid, status);
-					if (fprintf(out_f, "%d %d %llu %lu %d\n", task_idx, task_info[task_idx].pid, task_info[task_idx].cookie, clock_get_time_nsecs(), status) < 0) {
+					printf("Task %d completed, status=%d, cpu_time_s=%.3f, runq_wait_time_s=%.3f\n",
+							terminated_pid,
+							status,
+							task_info[task_idx].schedstat.cpu_time / 1000000000.0,
+							task_info[task_idx].schedstat.runq_wait_time / 1000000000.0);
+					if (fprintf(out_f, "%d %d %llu %lu %d %lu %lu\n",
+								task_idx,
+								task_info[task_idx].pid,
+								task_info[task_idx].cookie,
+								clock_get_time_nsecs(),
+								status,
+								task_info[task_idx].schedstat.cpu_time,
+								task_info[task_idx].schedstat.runq_wait_time) < 0) {
 						fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
 						exit(1);
 					}
@@ -482,7 +514,9 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 				fprintf(stdout, "Test duration elapsed, sending SIGINT to remaining children...\n");
 				for (task_idx = 0; task_idx < task_count; task_idx++) {
 					if (task_info[task_idx].running) {
-						kill(task_info[task_idx].pid, SIGINT);
+						int pid = task_info[task_idx].pid;
+						task_info[task_idx].schedstat = fetch_proc_pid_schedstat(pid);
+						kill(pid, SIGINT);
 					}
 				}
 				killed = true;
@@ -609,7 +643,8 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "\t\t[cpu sibling count]\n");
 		fprintf(stderr, "\t\tFor each cpu sibling group: [cpu_0], [cpu_1], ...\n");
 		fprintf(stderr, "\t\t[process count]\n");
-		fprintf(stderr, "\t\tFor each process: [task_idx] [pid] [cookie] [stop_ns] [exit_code]\n");
+		fprintf(stderr, "\t\tFor each process: [task_idx] [pid] [cookie] [stop_ns] [exit_code] [cpu_time_ns] [runq_wait_time_ns]\n");
+		fprintf(stderr, "\t\t\ncpu_time and runq_wait time will only be available if schtest interrupts the task; in other words the task must run for longer than the test duration\n");
 		fprintf(stderr, "\t\t[start_ns] [stop_ns]\n");
 		fprintf(stderr, "\tfork_[task_idx].txt contains the stdout and stderr of each executed task\n");
 		fprintf(stderr, "\nExamples of usage\n");
