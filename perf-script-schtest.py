@@ -23,12 +23,14 @@ from perf_trace_context import *
 from Core import *
 
 class Task:
-    def __init__(self, id, pid, cookie, stop_ns, exit_code):
+    def __init__(self, id, pid, cookie, stop_ns, exit_code, cpu_time, runq_wait_time):
         self.id = id
         self.pid = pid
         self.cookie = cookie
         self.stop_ns = stop_ns
         self.exit_code = exit_code
+        self.cpu_time = cpu_time
+        self.runq_wait_time = runq_wait_time
 
 class SchtestConfig:
     def __init__(self, tasks, cpu_set, cpu_count, cpu_groups, start_ns, stop_ns):
@@ -76,7 +78,7 @@ def parse_schtest_out():
     print("tasks:")
     for p in range(task_count):
         tok = f.readline().split(' ')
-        task = Task(id=int(tok[0]), pid=int(tok[1]), cookie=int(tok[2]), stop_ns=int(tok[3]), exit_code=int(tok[4]))
+        task = Task(id=int(tok[0]), pid=int(tok[1]), cookie=int(tok[2]), stop_ns=int(tok[3]), exit_code=int(tok[4]), cpu_time=int(tok[5])/1000000000, runq_wait_time=int(tok[6])/1000000000)
         tasks.append(task)
         print(f"id={task.id}, pid={task.pid}, cookie={task.cookie}, stop_ns={task.stop_ns}, exit_code={task.exit_code}")
     tok = f.readline().split(' ')
@@ -224,32 +226,34 @@ class Timeline:
     def compute_bogops_count(self):
         file_pattern = 'fork_*.txt'
         bogops_pattern = r'^\s*Bogops count\s*=\s*(\d+)\s*$'
-        active_ratio_pattern = r'^\s*Active ratio\s*=\s*(\d+\.\d+)\s*$'
         matching_files = glob.glob(os.path.join(results_dir, file_pattern))
         total_bogops_count = 0
-        total_active_ratio = 0
         for filename in matching_files:
             bogops_count = None
-            active_ratio = None
             with open(filename, 'r') as file:
                 for line in file:
                     match = re.match(bogops_pattern, line)
                     if match:
                         bogops_count = int(match.group(1))
-                    match = re.match(active_ratio_pattern, line)
-                    if match:
-                        active_ratio = float(match.group(1))
             if bogops_count is not None:
                 total_bogops_count += bogops_count
             else:
                 print(f"Could not find bogops count in {filename}, defaulting to zero")
-            if active_ratio is not None:
-                total_active_ratio += active_ratio
-            else:
-                print(f"Could not find active ratio in {filename}, defaulting to zero")
         print(f"Total bogops count: {total_bogops_count}")
-        print(f"Average bogops count: {total_bogops_count / len(matching_files):0f}")
-        print(f"Average active ratio: {total_active_ratio / len(matching_files):3f}")
+        avg_bogops_count = total_bogops_count / len(matching_files)
+        print(f"Average bogops count: {avg_bogops_count:.0f}")
+        total_cpu_time = 0
+        total_runq_wait_time = 0
+        for t in cfg.tasks:
+            total_cpu_time += t.cpu_time
+            total_runq_wait_time += t.runq_wait_time
+        print(f"Total cpu time: {total_cpu_time:.3f}")
+        avg_cpu_time = total_cpu_time / len(cfg.tasks)
+        print(f"Average cpu time: {avg_cpu_time:.3f}")
+        avg_runq_wait_time = total_runq_wait_time / len(cfg.tasks)
+        print(f"Total runq wait time: {avg_runq_wait_time:.3f}")
+        bogops_per_cpu_time = total_bogops_count / total_cpu_time
+        print(f"Bogops per cpu time: {bogops_per_cpu_time:.0f}")
 
 
 cfg = None
