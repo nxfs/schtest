@@ -156,7 +156,7 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 		fprintf(stderr, "Failed to add SIGCHILD to sigprocmask, rc = %d\n", rc);
 		exit(1);
 	}
-	uint64_t timeout_ns = clock_get_time_nsecs() + duration * 1000000000;
+	uint64_t timeout_ns = clock_get_time_nsecs() + (uint64_t)(duration) * 1000000000lu;
 	bool killed = false;
 	int waiting_count = task_count;
 	while (waiting_count) {
@@ -165,8 +165,8 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 		if (now_ns > timeout_ns)
 			timeout_ns = now_ns;
 		struct timespec timeout;
-		timeout.tv_sec = (timeout_ns - now_ns) / 1000000000;
-		timeout.tv_nsec = (timeout_ns - now_ns) % 1000000000;
+		timeout.tv_sec = (timeout_ns - now_ns) / 1000000000lu;
+		timeout.tv_nsec = (timeout_ns - now_ns) % 1000000000lu;
 		rc = sigtimedwait(&mask, &info, duration > 0 || killed ? &timeout : NULL);
 		if (rc > 0) {
 			if (info.si_signo == SIGCHLD) {
