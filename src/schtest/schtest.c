@@ -86,12 +86,61 @@ static struct proc_pid_schedstat fetch_proc_pid_schedstat(int pid) {
 	sprintf(path, "/proc/%d/schedstat", pid);
 	FILE *f = fopen(path, "r");
 	if (f != NULL) {
-		fscanf(f, "%lu %lu %lu", &schedstat.cpu_time, &schedstat.runq_wait_time, &schedstat.timeslices);
+		fscanf(f, "%llu %llu %llu", &schedstat.cpu_time, &schedstat.runq_wait_time, &schedstat.timeslices);
 		fclose(f);
 	} else {
 		fprintf(stderr, "Failed to read schedstat at %s\n", path);
 	}
 	return schedstat;
+}
+
+static struct proc_pid_sched fetch_proc_pid_sched(int pid) {
+	struct proc_pid_sched sched = {0};
+	char path[PATH_MAX];
+	sprintf(path, "/proc/%d/sched", pid);
+	bool found = false;
+	FILE *f = fopen(path, "r");
+	if (f != NULL) {
+		ssize_t read;
+		float value;
+		char *line = NULL;
+		size_t len = 0;
+		while((read = getline(&line, &len, f)) != -1 ) {
+			if (sscanf(line, "core_forceidle_sum%*[ \t]:%*[ \t]%f", &value) == 1) {
+				sched.core_forceidle_sum = value;
+				found = true;
+				break;
+			}
+		}
+		fclose(f);
+		if (line)
+			free(line);
+	} else {
+		fprintf(stderr, "Failed to read schedstat at %s\n", path);
+	}
+	if (!found) {
+		fprintf(stderr, "Force idle not found for %d\n", pid);
+	}
+	return sched;
+}
+
+static int enable_sched_schedstats() {
+	char path[] = "/proc/sys/kernel/sched_schedstats";
+	FILE *f = fopen(path, "w");
+	if (f != NULL) {
+		if (fprintf(f, "1") < 0) {
+			fprintf(stderr, "Could not write %s, %d\n", path, errno);
+			return errno;
+		};
+		if (fclose(f)) {
+			fprintf(stderr, "Could not close %s, %d\n", path, errno);
+			return errno;
+		};
+	} else {
+		fprintf(stderr, "Could not open %s, %d\n", path, errno);
+		return errno;
+	}
+
 }
 
 static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *task_info, FILE *out_f) {
@@ -107,13 +156,17 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 		fprintf(stderr, "Failed to add SIGCHILD to sigprocmask, rc = %d\n", rc);
 		exit(1);
 	}
-	int waiting_count = task_count;
-	time_t timeout_epoch = time(NULL) + duration + 1;
+	uint64_t timeout_ns = clock_get_time_nsecs() + duration * 1000000000;
 	bool killed = false;
+	int waiting_count = task_count;
 	while (waiting_count) {
 		siginfo_t info;
+		uint64_t now_ns = clock_get_time_nsecs();
+		if (now_ns > timeout_ns)
+			timeout_ns = now_ns;
 		struct timespec timeout;
-		timeout.tv_sec = MAX(timeout_epoch - time(NULL), 1);
+		timeout.tv_sec = (timeout_ns - now_ns) / 1000000000;
+		timeout.tv_nsec = (timeout_ns - now_ns) % 1000000000;
 		rc = sigtimedwait(&mask, &info, duration > 0 || killed ? &timeout : NULL);
 		if (rc > 0) {
 			if (info.si_signo == SIGCHLD) {
@@ -128,19 +181,21 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 						exit(1);
 					}
 					task_info[task_idx].running = false;
-					printf("Task %d completed, status=%d, cpu_time_s=%.3f, runq_wait_time_s=%.3f\n",
+					printf("Task %d completed, status=%d, cpu_time_s=%.3f, runq_wait_time_s=%.3f, core_forceidle_sum=%.9f\n",
 							terminated_pid,
 							status,
 							task_info[task_idx].schedstat.cpu_time / 1000000000.0,
-							task_info[task_idx].schedstat.runq_wait_time / 1000000000.0);
-					if (fprintf(out_f, "%d %d %llu %lu %d %lu %lu\n",
+							task_info[task_idx].schedstat.runq_wait_time / 1000000000.0,
+							task_info[task_idx].sched.core_forceidle_sum / 1000000000.0);
+					if (fprintf(out_f, "%d %d %llu %lu %d %llu %llu %f\n",
 								task_idx,
 								task_info[task_idx].pid,
 								task_info[task_idx].cookie,
 								clock_get_time_nsecs(),
 								status,
 								task_info[task_idx].schedstat.cpu_time,
-								task_info[task_idx].schedstat.runq_wait_time) < 0) {
+								task_info[task_idx].schedstat.runq_wait_time,
+								task_info[task_idx].sched.core_forceidle_sum) < 0) {
 						fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
 						exit(1);
 					}
@@ -167,10 +222,12 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 					if (task_info[task_idx].running) {
 						int pid = task_info[task_idx].pid;
 						task_info[task_idx].schedstat = fetch_proc_pid_schedstat(pid);
+						task_info[task_idx].sched = fetch_proc_pid_sched(pid);
 						kill(pid, SIGINT);
 					}
 				}
 				killed = true;
+				timeout_ns += 5000000000;
 			}
 		} else {
 			fprintf(stderr, "Error %d while waiting for children\n", errno);
@@ -212,6 +269,9 @@ int run(struct task_spec *head, int duration, int cookie_count, bool fake_cookie
 		}
 		task_shm->cookie_ready_sem = task_count;
 	}
+
+	printf("Enabling sched schedstats ...\n");
+	enable_sched_schedstats();
 
 	printf("Forking tasks ...\n");
 	struct task_info *task_info = (struct task_info*)malloc(task_count * sizeof(*task_info));
@@ -281,7 +341,6 @@ int run(struct task_spec *head, int duration, int cookie_count, bool fake_cookie
 		ready_timestamp = clock_get_time_nsecs();
 		printf("Cookies setup completed at %lu\n", ready_timestamp);
 	}
-
 
 	FILE * out_f;
 	if (open_out_file(results_dir, &out_f)) {
