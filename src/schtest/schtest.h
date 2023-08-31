@@ -1,6 +1,8 @@
 #ifndef __SCHTEST_H__
 #define __SCHTEST_H__
 
+#include <stdbool.h>
+
 #define CPU_SET_LENGTH 32
 
 struct task_spec {
