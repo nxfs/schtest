@@ -7,7 +7,7 @@ if(NOT DEFINED ENV{CMAKE_EXPORT_COMPILE_COMMANDS})
 	set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 endif()
 
-set(SOURCES main.c)
-set(HEADERS)
+set(SOURCES main.c schtest.c)
+set(HEADERS schtest.h)
 
 add_executable(schtest ${SOURCES} ${HEADERS})
