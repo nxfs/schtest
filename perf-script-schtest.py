@@ -79,9 +79,10 @@ def parse_schtest_out():
     print("tasks:")
     for p in range(task_count):
         tok = f.readline().split(' ')
+        raw_cookie = int(tok[2])
         task = Task(id=int(tok[0]),
                 pid=int(tok[1]),
-                cookie=int(tok[2]),
+                cookie=raw_cookie if raw_cookie != 0 else None,
                 stop_ns=int(tok[3]),
                 exit_code=int(tok[4]),
                 cpu_time=int(tok[5])/1000000000,
