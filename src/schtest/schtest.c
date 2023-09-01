@@ -187,7 +187,7 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 							task_info[task_idx].schedstat.cpu_time / 1000000000.0,
 							task_info[task_idx].schedstat.runq_wait_time / 1000000000.0,
 							task_info[task_idx].sched.core_forceidle_sum / 1000.0);
-					if (fprintf(out_f, "%d %d %llu %lu %d %llu %llu %f\n",
+					if (fprintf(out_f, "%d %d %llu %lu %d %llu %llu %llu\n",
 								task_idx,
 								task_info[task_idx].pid,
 								task_info[task_idx].cookie,
@@ -195,7 +195,7 @@ static void wait_for_tasks(int task_count, uint32_t duration, struct task_info *
 								status,
 								task_info[task_idx].schedstat.cpu_time,
 								task_info[task_idx].schedstat.runq_wait_time,
-								task_info[task_idx].sched.core_forceidle_sum) < 0) {
+								(unsigned long long int)(task_info[task_idx].sched.core_forceidle_sum * 1000000)) < 0) {
 						fprintf(stderr, "Could not write task info for task with pid %d, errno = %d\n", task_info[task_idx].pid, errno);
 						exit(1);
 					}
