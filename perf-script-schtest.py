@@ -137,7 +137,7 @@ class Timeline:
     def check_overlaps(self):
         overlap_file_path = f"{results_dir}/overlap_file.txt"
         overlap_file = open(overlap_file_path, 'w')
-        print(f"checking overlaps, full results will be written at {overlap_file_path}")
+        print(f"Checking overlaps, full results will be written at {overlap_file_path}")
         overlap_buckets = defaultdict(lambda: 0)
         self.cpu_timeline = dict(self.cpu_timeline)
         checked_cpus = set()
@@ -225,10 +225,12 @@ class Timeline:
             print(f"Longest overlap: {longest_overlap/nano_to_micro:.1e} ms".replace("e+0", "e+").replace("e-0", "e-"))
             for b in reversed(range(0, overlap_buckets_keys[len(overlap_buckets_keys) - 1] + 1)):
                 count = overlap_buckets[b]
-                star_count = int(math.log2(count + 1))
+                star_count = int(math.log2(count)) + 1 if count > 0 else 0
                 low_bucket = (2 ** b) / nano_to_micro
                 high_bucket = (2 ** (b + 1)) / nano_to_micro
                 print(f"Overlap count [{low_bucket:.1e}, {high_bucket:.1e}) ms: {count:6d}     {'*' * star_count}".replace("e+0", "e+").replace("e-0", "e-"))
+        else:
+            print("No overlaps were found!")
 
         overlap_file.close()
 
