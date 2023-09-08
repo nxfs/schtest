@@ -62,7 +62,7 @@ def parse_cpu_set(cpu_set):
     cpus
 
 def parse_schtest_out():
-    path = "results/out.txt"
+    path = f"{results_dir}/out.txt"
     f = open(path)
     cpu_set = parse_cpu_set(f.readline())
     print(f"cpu set: {cpu_set}")
