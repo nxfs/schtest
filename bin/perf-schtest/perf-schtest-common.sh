@@ -1,4 +1,6 @@
 #!/bin/bash
+# Creates cgroups and runs schtest via perf
+# Common logic invoked both on metal (../perf-schtest.sh) or within the guest (../qemu/perf-schtest.sh)
 
 is_mounted() {
 	cd "$1"
@@ -50,5 +52,12 @@ done
 args+=(-g $schtest_cg -D $results_dir)
 
 echo 1 > /proc/sys/kernel/sched_schedstats
-BIN_DIR=$(dirname ${BASH_SOURCE[0]})
-perf sched record -k raw -- $BIN_DIR/schtest "${args[@]}" > schtest.out.txt
+
+# some ugly hack so it works both on metal and on uemu
+SCHTEST=schtest
+if [ ! -x "$(command -v ${SCHTEST})" ]; then
+	BIN_DIR=$(dirname ${BASH_SOURCE[0]})/..
+	SCHTEST=$BIN_DIR/schtest
+fi
+
+perf sched record -k raw -- $SCHTEST "${args[@]}" > schtest.out.txt

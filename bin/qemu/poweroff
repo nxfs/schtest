@@ -1,0 +1,4 @@
+#!/bin/busybox sh
+# terminates qemu execution
+
+poweroff -f
